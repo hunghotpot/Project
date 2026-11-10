@@ -38,7 +38,7 @@
         "zustand": "^5.1.0"
     },
     "overrides": {
-        "rollup": "npm:@rollup/wasm-node@4.68.2"
+        "rollup": "$rollup"
     },
     "devDependencies": {
         "@eslint/eslintrc": "^3",

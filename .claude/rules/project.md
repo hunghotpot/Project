@@ -21,6 +21,7 @@ PostgreSQL (image pgvector/pgvector:pg16), Redis (sau), Zod, TanStack Query, Zus
 - Commit nhỏ, message dạng conventional commits.
 - Sau mỗi tính năng: chạy `npm run lint && npm run typecheck`.
 - Ngôn ngữ UI: tiếng Việt. Code, tên biến: tiếng Anh.
+- Giai đoạn AI: theo `.claude/rules/ai.md` và thiết kế trong `docs/ai/*.md` (kiến trúc hiện tại: `docs/architecture.md`).
 
 ## Lệnh
 npm run dev | npm run db:up | npx prisma migrate dev | npm run db:seed
