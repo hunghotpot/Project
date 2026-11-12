@@ -97,7 +97,7 @@ Tự xây bằng `jose` + `bcryptjs`, không dùng thư viện auth ngoài.
 - **Mã đơn:** `FS-YYYYMMDD-0001`, số thứ tự theo ngày (giờ Việt Nam) lấy từ bảng `OrderSequence` bằng upsert increment nên không trùng.
 - **Phí vận chuyển:** `src/lib/shipping.ts` — miễn phí từ 500.000đ, dưới mức đó 30.000đ.
 - **VietQR:** `src/server/payment/vietqr.ts` tự sinh payload chuẩn NAPAS 247 (có test CRC). Đặt `BANK_NAME`, `BANK_BIN`, `BANK_ACCOUNT_NO`, `BANK_ACCOUNT_NAME` trong `.env`; giá trị mặc định chỉ là dữ liệu mẫu từ Figma.
-- **Chưa có:** tự động đối soát tiền chuyển khoản (đơn chuyển khoản vẫn `PENDING` cho tới khi xác nhận tay), voucher/giảm giá, tự huỷ đơn chuyển khoản quá hạn (chỉ đơn VNPAY mới có hạn 15 phút).
+- **Chưa có:** tự động đối soát tiền chuyển khoản (Admin xác nhận tay đã nhận tiền ở `/admin/orders/[id]`; trước đó đơn vẫn chờ thanh toán), voucher/giảm giá, tự huỷ đơn chuyển khoản quá hạn (chỉ đơn VNPAY mới có hạn 15 phút).
 - **Test:** `order.service.integration.test.ts` chạy trên PostgreSQL thật (cần `npm run db:up`), gồm 2 đơn cùng mua biến thể còn 1 sản phẩm và 5 người tranh 2 sản phẩm.
 
 ## Thanh toán VNPay
@@ -197,10 +197,3 @@ docker-compose.yml      # PostgreSQL (pgvector) + Redis
 ```
 
 Quy ước kiến trúc chi tiết: xem [CLAUDE.md](CLAUDE.md), `.claude/rules/project.md` và `.claude/rules/ai.md` (phần AI). Việc cần làm tiếp: `docs/TODO.md`.
-
-
-
-
-
-
-
