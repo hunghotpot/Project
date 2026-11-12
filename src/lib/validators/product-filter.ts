@@ -53,6 +53,8 @@ export const productFilterSchema = z
     material: listParam,
     style: listParam,
     occasion: listParam,
+    /** Mùa (xuân | hè | thu | đông); khớp khi sản phẩm có ít nhất một mùa trùng. */
+    season: listParam,
     gender: z
       .preprocess((v) => (typeof first(v) === "string" ? (first(v) as string).toLowerCase() : v), z.enum(PRODUCT_GENDERS).optional())
       .catch(undefined),
@@ -92,7 +94,7 @@ export function parseProductFilters(input: SearchParamsLike): ProductFilters {
   return productFilterSchema.parse(raw)
 }
 
-export const FILTER_LIST_KEYS = ["size", "color", "material", "style", "occasion"] as const
+export const FILTER_LIST_KEYS = ["size", "color", "material", "style", "occasion", "season"] as const
 export type FilterListKey = (typeof FILTER_LIST_KEYS)[number]
 
 /** ProductFilters → URLSearchParams, bỏ giá trị mặc định để URL ngắn gọn. */

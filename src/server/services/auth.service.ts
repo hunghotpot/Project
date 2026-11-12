@@ -1,7 +1,7 @@
 import "server-only"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import bcrypt from "bcryptjs"
-import type { Prisma, Role } from "@prisma/client"
+import type { Prisma, Role, UserStatus } from "@prisma/client"
 import { REFRESH_TTL_SECONDS } from "@/lib/auth/constants"
 import type { ChangePasswordInput, LoginInput, RegisterInput, UpdateProfileInput } from "@/lib/validators/auth"
 import { signAccessToken } from "@/server/auth/jwt"
@@ -24,6 +24,9 @@ export type AuthErrorCode =
   | "REFRESH_TOKEN_REUSED"
   | "WRONG_PASSWORD"
   | "USER_NOT_FOUND"
+  | "ACCOUNT_LOCKED"
+
+const LOCKED_MESSAGE = "Tài khoản đã bị khoá. Vui lòng liên hệ cửa hàng để được hỗ trợ"
 
 export class AuthError extends Error {
   constructor(
@@ -58,6 +61,7 @@ type Db = Prisma.TransactionClient
 
 interface UserRow extends PublicUser {
   passwordHash: string
+  status: UserStatus
 }
 
 function toPublicUser(u: PublicUser): PublicUser {
@@ -98,6 +102,7 @@ async function issueSession(user: PublicUser, familyId: string, client: Db = db)
 export async function startSession(userId: string): Promise<AuthSession> {
   const user = await db.user.findUnique({ where: { id: userId } })
   if (!user) throw new AuthError("USER_NOT_FOUND", "Tài khoản không tồn tại")
+  if (user.status === "LOCKED") throw new AuthError("ACCOUNT_LOCKED", LOCKED_MESSAGE)
   return issueSession(user, randomUUID())
 }
 
@@ -139,6 +144,8 @@ export async function login(input: LoginInput, ctx: { ip: string }): Promise<Aut
   }
 
   clearLoginFailures(key)
+  // Kiểm sau khi mật khẩu đúng: chỉ chủ tài khoản biết tài khoản đang bị khoá.
+  if (user.status === "LOCKED") throw new AuthError("ACCOUNT_LOCKED", LOCKED_MESSAGE)
   return issueSession(user, randomUUID())
 }
 
@@ -166,6 +173,10 @@ export async function refresh(refreshToken: string): Promise<AuthSession> {
   if (record.expiresAt.getTime() <= Date.now()) {
     throw new AuthError("INVALID_REFRESH_TOKEN", "Phiên đăng nhập đã hết hạn")
   }
+  if (record.user.status === "LOCKED") {
+    await db.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } })
+    throw new AuthError("ACCOUNT_LOCKED", LOCKED_MESSAGE)
+  }
 
   const rotated = await db.$transaction(async (tx) => {
     // updateMany có điều kiện revokedAt=null → hai request song song chỉ một bên thắng.
@@ -190,7 +201,8 @@ async function revokeFamilyAndThrow(familyId: string): Promise<never> {
 
 export async function getUserById(id: string): Promise<PublicUser | null> {
   const user = await db.user.findUnique({ where: { id } })
-  return user ? toPublicUser(user) : null
+  // Tài khoản bị khoá coi như không có phiên: access token còn hạn cũng mất hiệu lực ngay (getCurrentUser dùng hàm này).
+  return user && user.status === "ACTIVE" ? toPublicUser(user) : null
 }
 
 export async function updateProfile(userId: string, input: UpdateProfileInput): Promise<PublicUser> {

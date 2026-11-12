@@ -82,8 +82,8 @@ Tự xây bằng `jose` + `bcryptjs`, không dùng thư viện auth ngoài.
 
 ## Giỏ hàng
 
-- **Service:** `src/server/services/cart.service.ts` — `getCart`, `addItem`, `updateQuantity` (số lượng 0 = xoá dòng), `removeItem`, `clearCart`, `mergeGuestCart`. Mọi hàm nhận `ctx` (`{ userId }` hoặc `{ sessionId }`) và không đọc cookie/headers, nên Route Handler và AI tool-calling dùng lại được.
-- **Chỉ cho user đã đăng nhập:** khách không thêm/sửa/xoá được (API trả 401 `UNAUTHENTICATED`), `/cart` chuyển sang `/login?next=/cart`, icon giỏ và nút "Thêm vào giỏ hàng" dẫn khách sang đăng nhập rồi quay lại đúng trang. `cart.service` vẫn nhận được `{ sessionId }` và có `mergeGuestCart` (bảng `Cart` có `sessionId`), nhưng app hiện không dùng; nếu sau này muốn giỏ khách thì chỉ cần cho `resolveCartContext` đọc cookie phiên và gọi `mergeGuestCart` khi đăng nhập.
+- **Service:** `src/server/services/cart.service.ts` — `getCart`, `addItem`, `updateQuantity` (số lượng 0 = xoá dòng), `removeItem`, `clearCart`. Mọi hàm nhận `ctx` (`{ userId }`) và không đọc cookie/headers, nên Route Handler và AI tool-calling dùng lại được.
+- **Chỉ cho user đã đăng nhập:** khách không thêm/sửa/xoá được (API trả 401 `UNAUTHENTICATED`), `/cart` chuyển sang `/login?next=/cart`, icon giỏ và nút "Thêm vào giỏ hàng" dẫn khách sang đăng nhập rồi quay lại đúng trang. Không có giỏ khách (đã bỏ khỏi code và DB); trợ lý AI cũng chỉ dành cho người đã đăng nhập.
 - **Tồn kho:** thêm/sửa không được vượt `stock`, lỗi có mã (`INSUFFICIENT_STOCK`, `OUT_OF_STOCK`...) và thông báo tiếng Việt. Chỉ kiểm tra, không giữ chỗ; trừ kho nằm ở bước đặt hàng.
 - **Cảnh báo:** giỏ trả kèm cảnh báo khi giá đã đổi so với lúc thêm (`CartItem.priceAtAdd`), tồn kho giảm dưới số lượng, hết hàng hoặc sản phẩm ngừng bán.
 - **API:** `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/[variantId]`.
@@ -135,11 +135,20 @@ Dành cho đơn có `paymentMethod = VNPAY`. Tích hợp API 2.1.0, ký HMAC-SHA
 
 Test: `payment.service.integration.test.ts` (PostgreSQL thật, dùng secret giả cố định trong `vitest.config.ts`) và `src/server/payment/vnpay.test.ts` (ký/kiểm chữ ký).
 
+## Trang Admin
+
+- **Vào:** đăng nhập bằng tài khoản ADMIN (xem bảng tài khoản demo) rồi mở `/admin` (menu tài khoản có mục "Trang quản trị"). Middleware chặn theo role, `layout` đọc lại DB bằng `requireAdmin()`; **mọi Server Action và route Admin còn phải tự kiểm quyền bằng `getAdminUser()`** (`src/server/auth/admin.ts`).
+- **Màn hình:** Tổng quan, Đơn hàng (+ chi tiết), Tồn kho & Sản phẩm, Danh mục, Bảng size, Khách hàng (+ chi tiết) chạy thật; **Voucher** và **Cài đặt hệ thống** chỉ là giao diện minh hoạ (chưa có backend, có biểu ngữ "chưa kết nối").
+- **Ảnh sản phẩm:** tải lên qua `POST /api/admin/uploads` (chỉ Admin; JPG/PNG/WebP kiểm bằng chữ ký file, tối đa 5MB và 4 ảnh/lần, tên file do server sinh), lưu ở `public/uploads/` (đã nằm trong `.gitignore`) và phục vụ qua `/uploads/<tên>`. Ảnh seed là ảnh giữ chỗ từ placehold.co.
+- **Khoá tài khoản khách:** `User.status` (ACTIVE/LOCKED); tài khoản bị khoá không đăng nhập hay refresh được, phiên cũ mất hiệu lực ngay.
+- **Code:** nghiệp vụ ở `src/server/services/admin-*.service.ts`; giao diện ở `src/app/(admin)/admin/` và `src/components/admin/`; quy ước dựng màn hình mới ở `docs/admin-ui.md`.
+- **Test:** test Server Action Admin dùng mock (quyền, input, lỗi); test service `admin-*.integration.test.ts` cần PostgreSQL (`npm run db:up`).
+
 ## Đơn hàng của tôi
 
 - **Trang:** `/account/orders` (lọc theo trạng thái, tìm theo mã đơn/tên sản phẩm, phân trang; tất cả nằm trong URL `?status=&q=&page=`) và `/account/orders/[id]` (timeline trạng thái, sản phẩm, địa chỉ, thanh toán, hủy đơn, mua lại). Hai trang này không có sidebar nên `profile`/`addresses` nằm trong nhóm route `(panel)` (có sidebar), còn `orders` đứng riêng.
 - **Lịch sử trạng thái:** bảng `OrderStatusHistory` ghi mỗi lần đổi trạng thái (từ → sang, thời gian, người đổi `CUSTOMER`/`ADMIN`/`SYSTEM`, ghi chú/lý do) và luôn được ghi **trong cùng transaction** với lần đổi: tạo đơn, huỷ đơn (người dùng hoặc job hết hạn), IPN VNPay thành công, và `changeOrderStatus()`. Timeline dựng từ bảng này (`src/lib/order-timeline.ts`). Đơn cũ trước khi có bảng được backfill trong migration.
-- **`changeOrderStatus(orderId, to, actor, note)`** chuyển đơn tuần tự `PENDING → CONFIRMED → SHIPPING → DELIVERED` (không nhảy cóc, không đi lùi). Hiện **chưa có giao diện admin**: các trạng thái đang giao/hoàn thành chỉ đổi được bằng hàm này.
+- **`changeOrderStatus(orderId, to, actor, note)`** chuyển đơn tuần tự `PENDING → CONFIRMED → SHIPPING → DELIVERED` (không nhảy cóc, không đi lùi). Admin đổi trạng thái qua trang `/admin/orders` (xem mục "Trang Admin"), bọc bởi `adminChangeOrderStatus`.
 - **Quyền:** mọi hàm của `order.service` (`listOrders`, `getOrderDetail`, `cancelOrder`, `reorder`) ràng buộc `userId` ngay trong câu truy vấn; đơn của người khác không tìm thấy (trang trả 404, kể cả với tài khoản admin), không phụ thuộc vào UI.
 - **Hủy đơn:** chỉ khi `PENDING`/`CONFIRMED`; khoá dòng đơn rồi hoàn tồn kho, ghi lịch sử kèm lý do (tuỳ chọn) trong một transaction.
 - **Mua lại:** thêm các biến thể còn hàng của đơn cũ vào giỏ (cắt theo tồn kho, không vượt số còn lại, bỏ dòng hết hàng/ngừng bán và báo lý do) qua `cart.service.addItemsClamped`.
@@ -156,38 +165,38 @@ Tài khoản mẫu (chỉ dùng cho dev, mật khẩu được hash bằng bcryp
 | ADMIN | `admin@example.com` | `Admin@123456` |
 | CUSTOMER | `customer@example.com` | `Customer@123456` |
 
-Nội dung: 9 category (Áo / Quần là category cha), 120 sản phẩm, ~350 ảnh (picsum.photos), ~1.000 biến thể size × màu (một số hết hàng), 34 dòng size chart.
+Nội dung: 20 category (cây Nam / Nữ / Unisex + Phụ kiện), 125 sản phẩm, 378 ảnh giữ chỗ (placehold.co, ghi tên sản phẩm; ảnh thật tải lên qua trang Admin), 1.113 biến thể size × màu (một số hết hàng), 83 dòng size chart.
 
 Dữ liệu nằm trong `prisma/seed-data/` để dễ chỉnh:
 
 | File | Nội dung |
 | --- | --- |
 | `users.ts` | Tài khoản + địa chỉ mẫu |
-| `categories.ts` | Cây category, tiền tố SKU, size mặc định |
+| `categories.ts` | Cây category Nam / Nữ / Unisex + Phụ kiện; `PRODUCT_GROUPS` (tiền tố SKU, size, category lá theo giới tính) |
 | `products/*.ts` | Sản phẩm theo category (tên, giá, màu, mô tả, gợi ý phối) |
 | `vocab.ts` | Bảng màu (tên + hex), chất liệu (nhãn + câu mô tả) |
-| `size-charts.ts` | Size chart áo / quần / váy theo chuẩn Việt Nam |
-| `build.ts` | Ghép mô tả, sinh slug, SKU, biến thể, tồn kho |
+| `size-charts.ts` | Size chart theo từng category lá (số đo cơ thể; bảng nữ là số đo ước lượng) |
+| `build.ts` | Ghép mô tả, sinh slug, SKU, biến thể, tồn kho, ảnh giữ chỗ (placehold.co) |
 
 ## Cấu trúc thư mục
 
 ```
 src/
   middleware.ts         # chặn /account, /admin; refresh token
-  app/                  # routes (App Router): (shop), (auth), api/, actions/ = Server Actions
-  components/{ui,layout,home,product,cart,checkout,orders,auth,account}
-  server/               # chỉ chạy phía server: db.ts, services/*, auth/*, cart/*, payment/*
+  app/                  # routes (App Router): (shop), (auth), (admin), api/, uploads/, actions/ = Server Actions
+  components/{ui,layout,home,product,cart,checkout,orders,auth,account,admin,assistant}
+  server/               # chỉ chạy phía server: db.ts, services/* (kể cả admin-*), auth/*, cart/*, payment/*, ai/*, uploads.ts
   lib/{validators,utils,auth}  # Zod schema, helper thuần, hằng số
   types/                # kiểu dùng chung (catalog, order, address)
   test/                 # fake DB và fixture cho Vitest
   hooks/  stores/       # React hooks, Zustand stores
 prisma/{schema.prisma,seed.ts,seed-data/,migrations/}
-docs/                   # tài liệu trạng thái (status-customer.md)
+docs/                   # architecture.md, status-customer.md, admin-ui.md, TODO.md, ai/* (thiết kế AI), design/admin/* (ảnh Figma)
 .claude/rules/          # quy ước kiến trúc cho Claude Code
 docker-compose.yml      # PostgreSQL (pgvector) + Redis
 ```
 
-Quy ước kiến trúc chi tiết: xem [CLAUDE.md](CLAUDE.md) và `.claude/rules/project.md`.
+Quy ước kiến trúc chi tiết: xem [CLAUDE.md](CLAUDE.md), `.claude/rules/project.md` và `.claude/rules/ai.md` (phần AI). Việc cần làm tiếp: `docs/TODO.md`.
 
 
 

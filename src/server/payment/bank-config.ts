@@ -8,7 +8,7 @@ export const bankConfig = {
   name: process.env.BANK_NAME ?? "MB Bank (Quân Đội)",
   bin: process.env.BANK_BIN ?? "970422",
   accountNo: (process.env.BANK_ACCOUNT_NO ?? "999988882026").replace(/\s/g, ""),
-  accountName: process.env.BANK_ACCOUNT_NAME ?? "CONG TY TNHH SPORT BRAND",
+  accountName: process.env.BANK_ACCOUNT_NAME ?? "CONG TY TNHH FASHION STORE",
 }
 
 /** 999988882026 → "9999 8888 2026". */

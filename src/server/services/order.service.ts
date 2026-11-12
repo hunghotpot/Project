@@ -259,7 +259,7 @@ export async function createOrder(user: { id: string }, input: CreateOrderInput)
  * Điều kiện trạng thái (và `paymentIn` nếu có) nằm ngay trong câu UPDATE nên hai lần huỷ đồng thời chỉ một lần hoàn kho,
  * và job hết hạn không thể huỷ đơn vừa được thanh toán xong.
  */
-async function cancelOrderCore(
+export async function cancelOrderCore(
   orderId: string,
   scope: {
     userId?: string

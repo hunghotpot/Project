@@ -7,6 +7,7 @@ interface UserRec {
   name: string
   phone: string | null
   role: "CUSTOMER" | "ADMIN"
+  status: "ACTIVE" | "LOCKED"
   passwordHash: string
 }
 
@@ -34,7 +35,7 @@ const fake: any = {
       if (users.some((u) => u.email === data.email)) {
         throw Object.assign(new Error("Unique constraint failed"), { code: "P2002" })
       }
-      const rec: UserRec = { id: `u${++seq}`, role: "CUSTOMER", phone: null, ...data }
+      const rec: UserRec = { id: `u${++seq}`, role: "CUSTOMER", status: "ACTIVE", phone: null, ...data }
       users.push(rec)
       return rec
     },

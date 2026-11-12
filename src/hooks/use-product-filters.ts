@@ -72,6 +72,7 @@ export function useProductFilters() {
         material: [],
         style: [],
         occasion: [],
+        season: [],
         gender: undefined,
         minPrice: undefined,
         maxPrice: undefined,
@@ -92,7 +93,7 @@ export function useProductFilters() {
     for (const key of FILTER_LIST_KEYS) {
       for (const v of filters[key]) {
         const text = key === "style" ? (STYLE_LABEL[v] ?? v) : v
-        const prefix = { size: "Size", color: "Màu", material: "Chất liệu", style: "Phong cách", occasion: "Dịp" }[key]
+        const prefix = { size: "Size", color: "Màu", material: "Chất liệu", style: "Phong cách", occasion: "Dịp", season: "Mùa" }[key]
         add(`${key}:${v}`, `${prefix}: ${text}`, { [key]: filters[key].filter((x) => x !== v) })
       }
     }

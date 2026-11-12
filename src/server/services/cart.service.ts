@@ -12,12 +12,13 @@ import { formatVnd } from "@/lib/format"
 import { db } from "@/server/db"
 
 /*
- * Giỏ hàng. Mọi hàm nhận `ctx` (user hoặc session khách) làm tham số và KHÔNG đọc cookie/headers,
+ * Giỏ hàng. Mọi hàm nhận `ctx` ({ userId }) làm tham số và KHÔNG đọc cookie/headers,
  * nên Route Handler, Server Action và AI tool-calling đều gọi lại được.
+ * Giỏ hàng chỉ dành cho user đã đăng nhập (không có giỏ khách).
  * Tồn kho chỉ được kiểm tra (không giữ chỗ); việc trừ kho nằm ở bước đặt hàng.
  */
 
-export type CartContext = { userId: string; sessionId?: undefined } | { sessionId: string; userId?: undefined }
+export type CartContext = { userId: string }
 
 export type CartErrorCode =
   | "INVALID_QUANTITY"
@@ -67,10 +68,9 @@ const itemSelect = {
 
 type ItemRow = Prisma.CartItemGetPayload<{ select: typeof itemSelect }>
 
-function ownerWhere(ctx: CartContext): { userId: string } | { sessionId: string } {
-  if (ctx.userId) return { userId: ctx.userId }
-  if (ctx.sessionId) return { sessionId: ctx.sessionId }
-  throw new CartError("ITEM_NOT_FOUND", "Không xác định được giỏ hàng")
+function ownerWhere(ctx: CartContext): { userId: string } {
+  if (!ctx.userId) throw new CartError("ITEM_NOT_FOUND", "Không xác định được giỏ hàng")
+  return { userId: ctx.userId }
 }
 
 function assertQuantity(quantity: number, min: 0 | 1) {
@@ -93,7 +93,7 @@ async function getOrCreateCart(ctx: CartContext, client: Db): Promise<{ id: stri
   try {
     return await client.cart.create({ data: where, select: { id: true } })
   } catch (e) {
-    // Hai request đầu tiên của cùng một khách chạy song song: unique index chốt, bên thua lấy giỏ của bên thắng.
+    // Hai request đầu tiên của cùng một user chạy song song: unique index chốt, bên thua lấy giỏ của bên thắng.
     if (!isUniqueViolation(e)) throw e
     const again = await client.cart.findFirst({ where, select: { id: true } })
     if (again) return again
@@ -277,40 +277,4 @@ export async function clearCart(ctx: CartContext): Promise<CartView> {
   const cart = await db.cart.findFirst({ where: ownerWhere(ctx), select: { id: true } })
   if (cart) await db.cartItem.deleteMany({ where: { cartId: cart.id } })
   return EMPTY_CART
-}
-
-/**
- * Gộp giỏ khách vào giỏ user sau khi đăng nhập. Số lượng cộng dồn nhưng bị chặn bởi tồn kho
- * (không ném lỗi: người dùng không có hành động nào để sửa); dòng hết hàng/ngừng bán bị bỏ.
- * Giỏ khách bị xoá sau khi gộp.
- */
-export async function mergeGuestCart(userId: string, sessionId: string): Promise<CartView> {
-  const cartId = await db.$transaction(async (tx) => {
-    const userCart = await getOrCreateCart({ userId }, tx)
-    const guest = await tx.cart.findFirst({ where: { sessionId }, select: { id: true } })
-    if (!guest) return userCart.id
-
-    const guestItems = await tx.cartItem.findMany({ where: { cartId: guest.id }, orderBy: { id: "asc" } })
-    for (const g of guestItems) {
-      const variant = await tx.productVariant.findUnique({
-        where: { id: g.variantId },
-        select: { id: true, price: true, stock: true, product: { select: { isActive: true } } },
-      })
-      if (!variant || !variant.product.isActive || variant.stock <= 0) continue
-
-      const mine = await tx.cartItem.findFirst({ where: { cartId: userCart.id, variantId: g.variantId } })
-      const merged = Math.min((mine?.quantity ?? 0) + g.quantity, variant.stock, MAX_LINE_QUANTITY)
-      if (mine) {
-        await tx.cartItem.update({ where: { id: mine.id }, data: { quantity: merged, priceAtAdd: variant.price } })
-      } else {
-        await tx.cartItem.create({
-          data: { cartId: userCart.id, variantId: g.variantId, quantity: merged, priceAtAdd: variant.price },
-        })
-      }
-    }
-    await tx.cartItem.deleteMany({ where: { cartId: guest.id } })
-    await tx.cart.delete({ where: { id: guest.id } })
-    return userCart.id
-  })
-  return loadView(cartId)
 }

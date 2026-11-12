@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { resetRateLimitStore } from "@/server/auth/rate-limit"
 import { fakeStore } from "@/test/fake-db"
-import { AuthError, login, logout, refresh, register } from "./auth.service"
+import { AuthError, getUserById, login, logout, refresh, register, startSession } from "./auth.service"
 
 vi.mock("@/server/db", async () => ({ db: (await import("@/test/fake-db")).fakeDb }))
 
@@ -120,5 +120,48 @@ describe("logout", () => {
     await logout(session.refreshToken)
 
     await expectAuthError(refresh(session.refreshToken), "REFRESH_TOKEN_REUSED")
+  })
+})
+
+describe("tài khoản bị khoá (Admin khoá khách)", () => {
+  const lock = () => {
+    fakeStore.users[0].status = "LOCKED"
+  }
+
+  it("đăng nhập đúng mật khẩu vẫn bị chặn bằng ACCOUNT_LOCKED và không cấp phiên mới", async () => {
+    await register(newUser)
+    lock()
+    const tokensBefore = fakeStore.tokens.length
+    await expectAuthError(login({ email: newUser.email, password: newUser.password }, ctx), "ACCOUNT_LOCKED")
+    expect(fakeStore.tokens).toHaveLength(tokensBefore)
+  })
+
+  it("sai mật khẩu vẫn báo lỗi chung: không lộ tài khoản đang bị khoá cho người không biết mật khẩu", async () => {
+    await register(newUser)
+    lock()
+    await expectAuthError(login({ email: newUser.email, password: "SaiMatKhau1" }, ctx), "INVALID_CREDENTIALS")
+  })
+
+  it("refresh token còn hạn không dùng được nữa, mọi token của user bị thu hồi", async () => {
+    const session = await register(newUser)
+    await login({ email: newUser.email, password: newUser.password }, ctx)
+    lock()
+    await expectAuthError(refresh(session.refreshToken), "ACCOUNT_LOCKED")
+    expect(fakeStore.tokens.every((t) => t.revokedAt !== null)).toBe(true)
+  })
+
+  it("access token còn hạn mất hiệu lực ngay: getUserById trả null; mở khoá thì có lại", async () => {
+    const session = await register(newUser)
+    expect(await getUserById(session.user.id)).not.toBeNull()
+    lock()
+    expect(await getUserById(session.user.id)).toBeNull()
+    fakeStore.users[0].status = "ACTIVE"
+    expect(await getUserById(session.user.id)).not.toBeNull()
+  })
+
+  it("startSession cho tài khoản bị khoá bị từ chối", async () => {
+    const session = await register(newUser)
+    lock()
+    await expectAuthError(startSession(session.user.id), "ACCOUNT_LOCKED")
   })
 })

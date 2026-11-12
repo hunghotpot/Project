@@ -1,5 +1,5 @@
-import { CATEGORIES } from "./categories";
-import { PRODUCTS_BY_CATEGORY } from "./products";
+import { CATEGORIES, PRODUCT_GROUPS } from "./categories";
+import { PRODUCTS_BY_GROUP } from "./products";
 import type { Gender, ProductSeed } from "./types";
 import { COLORS, MATERIALS, type Season } from "./vocab";
 
@@ -49,6 +49,44 @@ function buildDescription(p: ProductSeed, index: number): string {
   ].join(" ");
 }
 
+/*
+ * Ảnh giữ chỗ cho dữ liệu seed: placehold.co (picsum.photos thường xuyên quá tải/lỗi).
+ * Mỗi sản phẩm một màu theo loại đồ, ghi tên sản phẩm và số ảnh để phân biệt; cùng đầu vào luôn ra cùng URL.
+ * Chỉ để dev/demo: ảnh thật tải lên qua trang Admin (public/uploads).
+ */
+const PLACEHOLDER_COLORS: Record<string, [bg: string, fg: string]> = {
+  "ao-thun": ["e2e8f0", "334155"],
+  "ao-so-mi": ["dbeafe", "1e3a8a"],
+  "ao-khoac": ["e7e5e4", "44403c"],
+  "quan-jeans": ["c7d2fe", "312e81"],
+  "quan-tay-kaki": ["e8dcc4", "57534e"],
+  "vay-dam": ["fde2e4", "881337"],
+  "vest-du-tiec-nam": ["d9e4dd", "14532d"],
+  "phu-kien": ["fef3c7", "78350f"],
+};
+
+/** Ngắt tên thành các dòng ngắn (tối đa ~16 ký tự) để chữ không tràn ảnh. */
+function wrapLabel(text: string, max = 16): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/)) {
+    if (line && (line + " " + word).length > max) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+export function placeholderImageUrl(groupKey: string, name: string, n: number): string {
+  const [bg, fg] = PLACEHOLDER_COLORS[groupKey] ?? ["e2e8f0", "334155"];
+  const text = [...wrapLabel(name), `(ảnh ${n})`].join("\n");
+  return `https://placehold.co/800x1000/${bg}/${fg}.png?text=${encodeURIComponent(text)}&font=source-sans-pro`;
+}
+
 // ─────────────── builders ───────────────
 
 export interface BuiltVariant {
@@ -94,19 +132,22 @@ export function buildProducts(): BuiltProduct[] {
   const skus = new Set<string>();
   const result: BuiltProduct[] = [];
 
-  for (const [categorySlug, products] of Object.entries(PRODUCTS_BY_CATEGORY)) {
-    const category = CATEGORIES.find((c) => c.slug === categorySlug);
-    if (!category?.skuPrefix || !category.sizes) {
-      throw new Error(`Category "${categorySlug}" thiếu skuPrefix/sizes`);
-    }
+  for (const [groupKey, products] of Object.entries(PRODUCTS_BY_GROUP)) {
+    const group = PRODUCT_GROUPS[groupKey];
+    if (!group) throw new Error(`Nhóm sản phẩm "${groupKey}" chưa khai báo trong PRODUCT_GROUPS`);
 
     products.forEach((p, i) => {
+      const categorySlug = group.leaf[p.gender];
+      if (!CATEGORIES.some((c) => c.slug === categorySlug)) {
+        throw new Error(`Không có category "${categorySlug}" cho "${p.name}"`);
+      }
+
       const slug = slugify(p.name);
       if (slugs.has(slug)) throw new Error(`Trùng slug: ${slug}`);
       slugs.add(slug);
 
       // Size: thỉnh thoảng bỏ size lớn nhất để số biến thể đa dạng hơn.
-      let sizes = p.sizes ?? category.sizes!;
+      let sizes = p.sizes ?? (p.gender === "WOMEN" && group.womenSizes ? group.womenSizes : group.sizes);
       if (sizes.length >= 4 && rand() < 0.3) sizes = sizes.slice(0, -1);
 
       // Giới hạn tối đa 12 biến thể: cắt bớt màu (quần có 7 size => 1 màu).
@@ -123,7 +164,7 @@ export function buildProducts(): BuiltProduct[] {
         const color = COLORS[colorKey];
         for (const size of sizes) {
           const sizeCode = size === "Free size" ? "FS" : size;
-          const sku = `${category.skuPrefix}-${String(i + 1).padStart(3, "0")}-${color.code}-${sizeCode}`;
+          const sku = `${group.skuPrefix}-${String(i + 1).padStart(3, "0")}-${color.code}-${sizeCode}`;
           if (skus.has(sku)) throw new Error(`Trùng SKU: ${sku}`);
           skus.add(sku);
           variants.push({
@@ -139,7 +180,7 @@ export function buildProducts(): BuiltProduct[] {
 
       const imageCount = 2 + Math.floor(rand() * 3); // 2-4
       const images = Array.from({ length: imageCount }, (_, n) => ({
-        url: `https://picsum.photos/seed/${slug}-${n + 1}/800/1000`,
+        url: placeholderImageUrl(groupKey, p.name, n + 1),
         alt: `${p.name} - ảnh ${n + 1}`,
         position: n,
       }));

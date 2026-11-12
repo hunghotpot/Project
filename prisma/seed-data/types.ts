@@ -1,4 +1,4 @@
-import type { ColorKey, MaterialKey, Season } from "./vocab";
+import type { ColorKey, MaterialKey, Occasion, Season } from "./vocab";
 
 export type Gender = "MEN" | "WOMEN" | "UNISEX";
 
@@ -8,9 +8,17 @@ export interface CategorySeed {
   description: string;
   /** slug của category cha; bỏ trống = category gốc */
   parent?: string;
-  /** Chỉ category lá (có sản phẩm) cần skuPrefix + sizes. */
-  skuPrefix?: string;
-  sizes?: string[];
+}
+
+/** Nhóm file sản phẩm (theo loại đồ). Mỗi sản phẩm được xếp vào category lá theo (nhóm, giới tính). */
+export interface ProductGroup {
+  /** Tiền tố SKU, giữ ổn định theo loại đồ dù sản phẩm nằm ở category nào. */
+  skuPrefix: string;
+  sizes: string[];
+  /** Size riêng cho nữ (quần nữ dùng số 26-32). */
+  womenSizes?: string[];
+  /** Category lá theo giới tính. */
+  leaf: Record<Gender, string>;
 }
 
 export interface ProductSeed {
@@ -19,7 +27,7 @@ export interface ProductSeed {
   material: MaterialKey;
   style: string;
   gender: Gender;
-  occasion: string[];
+  occasion: Occasion[];
   season: Season[];
   tags: string[];
   /** VND */

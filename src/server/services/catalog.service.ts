@@ -1,4 +1,4 @@
-﻿import "server-only"
+import "server-only"
 import { Prisma } from "@prisma/client"
 import { db } from "@/server/db"
 import { sectionLimitSchema } from "@/lib/validators/catalog"
@@ -8,6 +8,7 @@ import {
   type ProductFilters,
 } from "@/lib/validators/product-filter"
 import { sizeRank } from "@/lib/product-variants"
+import { pickSizeChartRows } from "@/lib/size-chart"
 import type {
   CategoryCardData,
   CategoryDetail,
@@ -75,38 +76,30 @@ export async function getNavCategories(): Promise<NavCategory[]> {
   })
 }
 
-/** Category có sản phẩm trực tiếp, kèm ảnh bìa lấy từ sản phẩm mới nhất. */
+/** Category gốc (Nam, Nữ, Unisex, Phụ kiện) có sản phẩm, đếm cả category con; ảnh bìa lấy từ sản phẩm mới nhất. */
 export async function getHomeCategories(): Promise<CategoryCardData[]> {
-  const rows = await db.category.findMany({
-    where: { products: { some: { isActive: true } } },
-    orderBy: { name: "asc" },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      _count: { select: { products: { where: { isActive: true } } } },
-      products: {
-        where: { isActive: true },
-        orderBy: { createdAt: "desc" },
-        take: 1,
-        select: {
-          images: {
-            orderBy: { position: "asc" },
-            take: 1,
-            select: { url: true, alt: true },
-          },
-        },
-      },
-    },
+  const roots = await db.category.findMany({
+    where: { parentId: null },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, name: true, slug: true, children: { select: { id: true } } },
   })
 
-  return rows.map((c) => ({
-    id: c.id,
-    name: c.name,
-    slug: c.slug,
-    productCount: c._count.products,
-    cover: c.products[0]?.images[0] ?? null,
-  }))
+  const cards = await Promise.all(
+    roots.map(async (c) => {
+      const where = { isActive: true, categoryId: { in: [c.id, ...c.children.map((x) => x.id)] } }
+      const [productCount, latest] = await Promise.all([
+        db.product.count({ where }),
+        db.product.findFirst({
+          where,
+          orderBy: { createdAt: "desc" },
+          select: { images: { orderBy: { position: "asc" }, take: 1, select: { url: true, alt: true } } },
+        }),
+      ])
+      return { id: c.id, name: c.name, slug: c.slug, productCount, cover: latest?.images[0] ?? null }
+    })
+  )
+
+  return cards.filter((c) => c.productCount > 0)
 }
 
 export async function getNewProducts(limit = 8): Promise<ProductCardData[]> {
@@ -169,11 +162,16 @@ function variantWhere(f: ProductFilters, omit?: Dim): Prisma.ProductVariantWhere
   return v
 }
 
-function productWhere(f: ProductFilters, scope: Scope, omit?: Dim): Prisma.ProductWhereInput {
+function productWhere(f: ProductFilters, scope: Scope, omit?: Dim, includeUnisex = false): Prisma.ProductWhereInput {
   const and: Prisma.ProductWhereInput[] = [{ isActive: true }]
   if (scope.categoryIds) and.push({ categoryId: { in: scope.categoryIds } })
   if (scope.searchIds) and.push({ id: { in: scope.searchIds } })
-  if (omit !== "gender" && f.gender) and.push({ gender: GENDER_ENUM[f.gender] })
+  if (omit !== "gender" && f.gender) {
+    // includeUnisex (dùng cho tìm kiếm AI): "nam"/"nữ" gồm cả sản phẩm unisex. Mặc định (giao diện web) so khớp đúng giá trị.
+    const g = GENDER_ENUM[f.gender]
+    and.push(includeUnisex && g !== "UNISEX" ? { gender: { in: [g, "UNISEX"] } } : { gender: g })
+  }
+  if (f.season.length) and.push({ season: { hasSome: f.season } })
   if (omit !== "material" && f.material.length) and.push({ material: { in: f.material } })
   if (omit !== "style" && f.style.length) and.push({ style: { in: f.style } })
   if (omit !== "occasion" && f.occasion.length) and.push({ occasion: { hasSome: f.occasion } })
@@ -235,26 +233,26 @@ function tally<T>(rows: T[], key: (r: T) => string): FacetValue[] {
   return [...m].map(([value, count]) => ({ value, count }))
 }
 
-async function loadFacets(f: ProductFilters, scope: Scope): Promise<ProductFacets> {
+async function loadFacets(f: ProductFilters, scope: Scope, includeUnisex: boolean): Promise<ProductFacets> {
   const [sizeRows, colorRows, materials, styles, genders, occasionRows, price] = await Promise.all([
     // distinct (product, size): mỗi sản phẩm chỉ đếm 1 lần dù có nhiều màu cùng size.
     db.productVariant.findMany({
-      where: { ...variantWhere(f, "size"), product: productWhere(f, scope, "size") },
+      where: { ...variantWhere(f, "size"), product: productWhere(f, scope, "size", includeUnisex) },
       select: { size: true },
       distinct: ["productId", "size"],
     }),
     db.productVariant.findMany({
-      where: { ...variantWhere(f, "color"), product: productWhere(f, scope, "color") },
+      where: { ...variantWhere(f, "color"), product: productWhere(f, scope, "color", includeUnisex) },
       select: { color: true, colorHex: true },
       distinct: ["productId", "color"],
     }),
-    db.product.groupBy({ by: ["material"], where: productWhere(f, scope, "material"), _count: { _all: true } }),
-    db.product.groupBy({ by: ["style"], where: productWhere(f, scope, "style"), _count: { _all: true } }),
-    db.product.groupBy({ by: ["gender"], where: productWhere(f, scope, "gender"), _count: { _all: true } }),
+    db.product.groupBy({ by: ["material"], where: productWhere(f, scope, "material", includeUnisex), _count: { _all: true } }),
+    db.product.groupBy({ by: ["style"], where: productWhere(f, scope, "style", includeUnisex), _count: { _all: true } }),
+    db.product.groupBy({ by: ["gender"], where: productWhere(f, scope, "gender", includeUnisex), _count: { _all: true } }),
     // occasion là mảng text → đếm phía JS (chỉ kéo đúng 1 cột).
-    db.product.findMany({ where: productWhere(f, scope, "occasion"), select: { occasion: true } }),
+    db.product.findMany({ where: productWhere(f, scope, "occasion", includeUnisex), select: { occasion: true } }),
     db.product.aggregate({
-      where: productWhere(f, scope, "price"),
+      where: productWhere(f, scope, "price", includeUnisex),
       _min: { basePrice: true },
       _max: { basePrice: true },
     }),
@@ -277,14 +275,24 @@ async function loadFacets(f: ProductFilters, scope: Scope): Promise<ProductFacet
   }
 }
 
+/** Tuỳ chọn ngoài bộ lọc URL, không hiện trên giao diện web. */
+export interface ListProductsOptions {
+  /** Lọc giới tính "nam"/"nữ" gồm cả sản phẩm unisex (dùng cho tìm kiếm AI). Mặc định false: so khớp đúng như giao diện web. */
+  includeUnisex?: boolean
+}
+
 /**
  * Danh sách sản phẩm + tổng số + facet. Không N+1: Prisma nạp images/variants bằng 1 query IN cho cả trang,
  * facet chạy song song bằng các query gộp (groupBy / distinct), không query theo từng sản phẩm.
  */
-export async function listProducts(input: ProductFilterInput = {}): Promise<ProductListResult> {
+export async function listProducts(
+  input: ProductFilterInput = {},
+  opts: ListProductsOptions = {}
+): Promise<ProductListResult> {
   const f = productFilterSchema.parse(input)
+  const includeUnisex = opts.includeUnisex ?? false
   const scope = await resolveScope(f)
-  const where = productWhere(f, scope)
+  const where = productWhere(f, scope, undefined, includeUnisex)
 
   const [rows, total, facets] = await Promise.all([
     db.product.findMany({
@@ -295,7 +303,7 @@ export async function listProducts(input: ProductFilterInput = {}): Promise<Prod
       select: productCardSelect,
     }),
     db.product.count({ where }),
-    loadFacets(f, scope),
+    loadFacets(f, scope, includeUnisex),
   ])
 
   return {
@@ -311,6 +319,36 @@ export async function listProducts(input: ProductFilterInput = {}): Promise<Prod
 
 
 /* ─────────────────────────── Product detail ─────────────────────────── */
+
+/**
+ * Bảng size áp dụng cho một category (và brand): bảng riêng của brand thắng bảng chung (brand = null).
+ * Rỗng nếu category chưa có bảng (ví dụ phụ kiện). Công khai, chỉ đọc; dùng chung cho trang sản phẩm và tư vấn size.
+ */
+export async function getSizeChart(categoryId: string, brand: string | null): Promise<SizeChartRow[]> {
+  return (await getSizeChartInfo(categoryId, brand)).rows
+}
+
+/** Như getSizeChart, kèm cờ cho biết bảng trả về là bảng riêng của brand (true) hay bảng chung (false). */
+export async function getSizeChartInfo(
+  categoryId: string,
+  brand: string | null
+): Promise<{ rows: SizeChartRow[]; brandSpecific: boolean }> {
+  const charts = await db.sizeChart.findMany({
+    where: { categoryId, OR: [{ brand }, { brand: null }] },
+    select: {
+      brand: true,
+      size: true,
+      chest: true,
+      waist: true,
+      hip: true,
+      heightMin: true,
+      heightMax: true,
+      weightMin: true,
+      weightMax: true,
+    },
+  })
+  return { rows: pickSizeChartRows(charts), brandSpecific: charts.some((c) => c.brand !== null) }
+}
 
 /** null nếu slug không tồn tại hoặc sản phẩm isActive = false (trang trả 404). */
 export async function getProductBySlug(slug: string): Promise<ProductDetail | null> {
@@ -337,34 +375,7 @@ export async function getProductBySlug(slug: string): Promise<ProductDetail | nu
   })
   if (!p) return null
 
-  // Bảng size riêng của brand thắng bảng chung (brand = null).
-  const charts = await db.sizeChart.findMany({
-    where: { categoryId: p.categoryId, OR: [{ brand: p.brand }, { brand: null }] },
-    select: {
-      brand: true,
-      size: true,
-      chest: true,
-      waist: true,
-      hip: true,
-      heightMin: true,
-      heightMax: true,
-      weightMin: true,
-      weightMax: true,
-    },
-  })
-  const rows = charts.some((c) => c.brand !== null) ? charts.filter((c) => c.brand !== null) : charts
-  const sizeChart: SizeChartRow[] = rows
-    .map((c) => ({
-      size: c.size,
-      chest: c.chest,
-      waist: c.waist,
-      hip: c.hip,
-      heightMin: c.heightMin,
-      heightMax: c.heightMax,
-      weightMin: c.weightMin,
-      weightMax: c.weightMax,
-    }))
-    .sort((a, b) => sizeRank(a.size) - sizeRank(b.size))
+  const sizeChart = await getSizeChart(p.categoryId, p.brand)
 
   return { ...p, variants: p.variants.sort((a, b) => sizeRank(a.size) - sizeRank(b.size)), sizeChart }
 }

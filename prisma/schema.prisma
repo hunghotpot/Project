@@ -20,6 +20,11 @@ enum Role {
   ADMIN
 }
 
+enum UserStatus {
+  ACTIVE
+  LOCKED
+}
+
 enum Gender {
   MEN
   WOMEN
@@ -58,14 +63,15 @@ enum PaymentStatus {
 // ───────────────────────────── Users ─────────────────────────────
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
+  id           String     @id @default(cuid())
+  email        String     @unique
   passwordHash String
   name         String
   phone        String?
-  role         Role     @default(CUSTOMER)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  role         Role       @default(CUSTOMER)
+  status       UserStatus @default(ACTIVE) // LOCKED: Admin khoá, không đăng nhập/refresh được
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   addresses          Address[]
   cart               Cart?
@@ -214,16 +220,14 @@ model SizeChart {
 
 // ─────────────────────────── Cart & Order ───────────────────────────
 
-// Giỏ của user đã đăng nhập (userId) HOẶC của khách (sessionId, id ẩn danh trong cookie).
-// Đúng một trong hai có giá trị — ràng buộc CHECK nằm trong migration cart_guest_session.
+// Giỏ của user đã đăng nhập, mỗi user một giỏ. Không có giỏ khách (cần tài khoản để dùng giỏ hàng).
 model Cart {
   id        String   @id @default(cuid())
-  userId    String?  @unique
-  sessionId String?  @unique
+  userId    String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user  User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   items CartItem[]
 }
 

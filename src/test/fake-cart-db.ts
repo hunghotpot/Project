@@ -20,8 +20,7 @@ interface ProductRec {
 }
 interface CartRec {
   id: string
-  userId: string | null
-  sessionId: string | null
+  userId: string
 }
 interface ItemRec {
   id: string
@@ -52,18 +51,12 @@ const fake: any = {
   cart: {
     findFirst: async ({ where }: any) => carts.find((c) => matches(c, where)) ?? null,
     create: async ({ data }: any) => {
-      const dup = carts.some(
-        (c) => (data.userId && c.userId === data.userId) || (data.sessionId && c.sessionId === data.sessionId)
-      )
-      if (dup) throw Object.assign(new Error("Unique constraint failed"), { code: "P2002" })
-      const rec: CartRec = { id: `c${++seq}`, userId: null, sessionId: null, ...data }
+      if (carts.some((c) => c.userId === data.userId)) {
+        throw Object.assign(new Error("Unique constraint failed"), { code: "P2002" })
+      }
+      const rec: CartRec = { id: `c${++seq}`, ...data }
       carts.push(rec)
       return rec
-    },
-    delete: async ({ where }: any) => {
-      const i = carts.findIndex((c) => c.id === where.id)
-      items = items.filter((it) => it.cartId !== where.id) // onDelete: Cascade
-      return carts.splice(i, 1)[0]
     },
   },
   cartItem: {

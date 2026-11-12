@@ -1,4 +1,35 @@
-// Từ vựng dùng chung cho dữ liệu seed: màu, chất liệu, mùa.
+// Từ vựng dùng chung cho dữ liệu seed: màu, chất liệu, mùa, dịp mặc.
+
+/*
+ * Dịp mặc (Product.occasion): từ vựng ĐÓNG. Bộ lọc `occasion` so khớp chính xác nên mọi sản phẩm phải dùng đúng
+ * các giá trị này; hoạt động chi tiết (yoga, golf, chạy bộ, picnic…) để ở `tags`. Xem docs/ai/01-data-for-ai.md mục 6.
+ */
+export const OCCASIONS = [
+  "đi làm",
+  "công tác",
+  "đi họp",
+  "đi phỏng vấn",
+  "đi học",
+  "đi chơi",
+  "dạo phố",
+  "đi cafe",
+  "hẹn hò",
+  "dự tiệc",
+  "dự sự kiện",
+  "dự đám cưới",
+  "dịp Tết",
+  "đi lễ chùa",
+  "du lịch",
+  "du lịch mùa đông",
+  "đi biển",
+  "đi phượt",
+  "đi xe máy",
+  "tập thể thao",
+  "đi nghe nhạc",
+  "chụp ảnh",
+  "ở nhà",
+] as const;
+export type Occasion = (typeof OCCASIONS)[number];
 
 export const COLORS = {
   white: { name: "Trắng", hex: "#FFFFFF", code: "WHT" },

@@ -1,9 +1,10 @@
 ﻿"use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { MinusIcon, PlusIcon } from "lucide-react"
 import { cn } from "cn"
 import { ProductGallery } from "@/components/product/product-gallery"
+import { AskSizeButton } from "@/components/assistant/ask-size-button"
 import { SizeGuideDialog } from "@/components/product/size-guide-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -21,6 +22,7 @@ import {
   type OptionState,
   type Selection,
 } from "@/lib/product-variants"
+import { useAssistantUi } from "@/stores/assistant-ui"
 import type { ProductDetail } from "@/types/catalog"
 
 export interface CartItemInput {
@@ -75,6 +77,13 @@ export function ProductDetailMain({
     })
   }
 
+  // Trợ lý gợi ý size và khách bấm "Chọn size": chọn đúng size đó nếu còn bán (bỏ qua nếu đã chọn rồi).
+  const sizeRequest = useAssistantUi((s) => s.sizeRequest)
+  useEffect(() => {
+    if (!sizeRequest || !sizes.includes(sizeRequest.size)) return
+    setSel((cur) => (cur.size === sizeRequest.size ? cur : select(variants, cur, "size", sizeRequest.size)))
+  }, [sizeRequest, sizes, variants])
+
   const subtitle = [product.category.name, GENDER_LABEL[product.gender], STYLE_LABEL[product.style] ?? product.style]
   const item = variant ? { variantId: variant.id, quantity } : null
 
@@ -125,7 +134,10 @@ export function ProductDetailMain({
         <fieldset className="space-y-3">
           <div className="flex items-center justify-between">
             <legend className="text-label font-bold">Kích cỡ (Size)</legend>
-            <SizeGuideDialog rows={product.sizeChart} categoryName={product.category.name} />
+            <div className="flex items-center gap-3">
+              <AskSizeButton slug={product.slug} name={product.name} />
+              <SizeGuideDialog rows={product.sizeChart} categoryName={product.category.name} />
+            </div>
           </div>
           <div className="flex flex-wrap gap-3">
             {sizes.map((s) => {

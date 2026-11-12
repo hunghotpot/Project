@@ -39,7 +39,18 @@ const PANT: Row[] = [
   ["34", undefined, 86, 102, [172, 178], [68, 74]],
 ];
 
-// Váy đầm (nữ).
+// Quần nữ: size theo vòng eo tính bằng inch (26-32). Số đo ước lượng, chưa hiệu chỉnh với dữ liệu thật.
+const WOMEN_PANT: Row[] = [
+  ["26", undefined, 66, 88, [150, 156], [40, 45]],
+  ["27", undefined, 69, 90, [152, 158], [43, 48]],
+  ["28", undefined, 71, 92, [154, 160], [46, 51]],
+  ["29", undefined, 74, 94, [156, 162], [49, 54]],
+  ["30", undefined, 76, 96, [158, 164], [52, 57]],
+  ["31", undefined, 79, 98, [160, 166], [55, 60]],
+  ["32", undefined, 81, 100, [162, 168], [58, 63]],
+];
+
+// Váy đầm (nữ). Cũng là số đo cơ thể của áo nữ.
 const DRESS: Row[] = [
   ["S", 82, 64, 90, [155, 160], [44, 48]],
   ["M", 86, 68, 94, [158, 163], [48, 53]],
@@ -55,12 +66,16 @@ const OVERSIZE_TEE: Row[] = [
   ["XL", 116, 102, 116, [173, 183], [72, 86]],
 ];
 
+// Mỗi category lá một bảng riêng. Nam và Unisex dùng số đo form regular (TOP/PANT); Nữ dùng số đo cơ thể nữ.
+// Urban Ghost (toàn bộ áo thun thương hiệu này là unisex) cắt oversize nên có bảng riêng ở áo thun unisex.
 export const SIZE_CHARTS: SizeChartSeed[] = [
-  ...chart("ao-thun", TOP),
-  ...chart("ao-thun", OVERSIZE_TEE, "Urban Ghost"),
-  ...chart("ao-so-mi", TOP),
-  ...chart("ao-khoac", TOP),
-  ...chart("quan-jeans", PANT),
-  ...chart("quan-tay-kaki", PANT),
-  ...chart("vay-dam", DRESS),
+  ...["ao-thun-nam", "ao-so-mi-nam", "ao-khoac-nam", "vest-du-tiec-nam"].flatMap((slug) => chart(slug, TOP)),
+  ...["quan-jeans-nam", "quan-tay-kaki-nam"].flatMap((slug) => chart(slug, PANT)),
+
+  ...["ao-thun-nu", "ao-so-mi-nu", "ao-khoac-nu", "vay-dam"].flatMap((slug) => chart(slug, DRESS)),
+  ...["quan-jeans-nu", "quan-tay-kaki-nu"].flatMap((slug) => chart(slug, WOMEN_PANT)),
+
+  ...["ao-thun-unisex", "ao-so-mi-unisex", "ao-khoac-unisex"].flatMap((slug) => chart(slug, TOP)),
+  ...chart("ao-thun-unisex", OVERSIZE_TEE, "Urban Ghost"),
+  ...chart("quan-unisex", PANT),
 ];

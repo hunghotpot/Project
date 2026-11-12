@@ -52,6 +52,20 @@ describe("serializeProductFilters", () => {
   })
 })
 
+describe("season", () => {
+  it("mặc định rỗng; nhận lặp key lẫn phân tách dấu phẩy, bỏ trùng", () => {
+    expect(parseProductFilters({}).season).toEqual([])
+    expect(parseProductFilters(new URLSearchParams("season=hè&season=thu,hè")).season).toEqual(["hè", "thu"])
+  })
+
+  it("đi vào URL và round-trip về đúng filter", () => {
+    const f = parseProductFilters({ season: ["hè", "xuân"], gender: "men" })
+    const sp = serializeProductFilters(f)
+    expect(sp.getAll("season")).toEqual(["hè", "xuân"])
+    expect(parseProductFilters(sp)).toEqual(f)
+  })
+})
+
 describe("productFilterSchema", () => {
   it("idempotent: parse lại output cho đúng output (service có thể parse input từ AI)", () => {
     const once = productFilterSchema.parse({ size: "M,L", inStock: true, gender: "men", page: 2 })

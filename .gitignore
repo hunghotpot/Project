@@ -60,6 +60,24 @@ public/uploads/*
 /pgdata/
 /.docker-data/
 
-# cấu hình cá nhân của Claude Code
+# cấu hình cá nhân của Claude Code (.claude/rules/* là quy ước chung nên vẫn đưa lên)
 .claude/settings.local.json
+.claude/launch.json
+.claude/worktrees/
 CLAUDE.local.md
+
+# editor / IDE (cấu hình cá nhân)
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# cache và file tạm
+.eslintcache
+.cache/
+*.tmp
+/tmp/
+/scratch/
+Desktop.ini
+
+/docs/

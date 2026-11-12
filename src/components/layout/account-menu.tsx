@@ -1,7 +1,7 @@
 ﻿"use client"
 
 import Link from "next/link"
-import { LogOutIcon, MapPinIcon, ShoppingBagIcon, UserIcon, UserRoundIcon } from "lucide-react"
+import { LayoutDashboardIcon, LogOutIcon, MapPinIcon, ShoppingBagIcon, UserIcon, UserRoundIcon } from "lucide-react"
 import { logoutAction } from "@/app/actions/auth"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
@@ -53,6 +53,11 @@ export function AccountMenu({ user }: { user: AccountMenuUser | null }) {
         <DropdownMenuItem render={<Link href="/account/orders" />}>
           <ShoppingBagIcon /> Đơn hàng của tôi
         </DropdownMenuItem>
+        {user.role === "ADMIN" && (
+          <DropdownMenuItem render={<Link href="/admin" />}>
+            <LayoutDashboardIcon /> Trang quản trị
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onClick={() => logoutAction()}>
           <LogOutIcon /> Đăng xuất
