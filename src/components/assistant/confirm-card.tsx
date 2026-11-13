@@ -3,20 +3,31 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { formatVnd } from "@/lib/format"
-import type { ConfirmView } from "@/types/assistant"
+import type { ConfirmResolved, ConfirmView } from "@/types/assistant"
 
 // Bước 2 của tool ghi: chỉ khi khách bấm "Xác nhận" ở đây mới được gọi API ghi (docs/ai/04-tool-calling.md mục 3).
-// Bấm một lần là khoá cả hai nút để không gửi trùng.
+// Bấm một lần là khoá cả hai nút để không gửi trùng. Kết quả (`resolved`) do tầng trên giữ trong tin nhắn nên thẻ không quên khi
+// khung chat đóng rồi mở lại; state cục bộ chỉ là dự phòng khi thẻ dùng riêng (trang /dev/assistant) không có ai ghi kết quả.
+const RESOLVED_LABEL: Record<ConfirmResolved, string> = {
+  confirming: "Đang thêm vào giỏ…",
+  added: "Đã thêm vào giỏ hàng",
+  cancelled: "Đã huỷ",
+  failed: "Chưa thêm được, bạn nhờ trợ lý thử lại nhé",
+}
+
 export function ConfirmCard({
   data,
+  resolved: resolvedProp,
   onConfirm,
   onCancel,
 }: {
   data: ConfirmView
+  resolved?: ConfirmResolved
   onConfirm?: (id: string) => void
   onCancel?: (id: string) => void
 }) {
-  const [resolved, setResolved] = useState<"confirmed" | "cancelled" | null>(null)
+  const [local, setLocal] = useState<ConfirmResolved | null>(null)
+  const resolved = resolvedProp ?? local
 
   return (
     <section aria-label="Xác nhận" className="space-y-3 rounded-2xl border border-primary bg-white p-4">
@@ -34,7 +45,7 @@ export function ConfirmCard({
 
       {resolved ? (
         <p role="status" className="text-label font-bold text-muted-foreground">
-          {resolved === "confirmed" ? "Đã gửi xác nhận" : "Đã huỷ"}
+          {RESOLVED_LABEL[resolved]}
         </p>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
@@ -42,7 +53,7 @@ export function ConfirmCard({
             type="button"
             size="sm"
             onClick={() => {
-              setResolved("confirmed")
+              setLocal("confirming")
               onConfirm?.(data.id)
             }}
           >
@@ -53,7 +64,7 @@ export function ConfirmCard({
             variant="outline"
             size="sm"
             onClick={() => {
-              setResolved("cancelled")
+              setLocal("cancelled")
               onCancel?.(data.id)
             }}
           >

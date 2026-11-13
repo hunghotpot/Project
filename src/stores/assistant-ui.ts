@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import type { ChatMessage, MeasureField } from "@/types/assistant"
+import type { ChatMessage, ConfirmResolved, MeasureField } from "@/types/assistant"
 import type { SizeChartRow } from "@/types/catalog"
 
 // Trạng thái khung chat trợ lý: đóng/mở, sản phẩm đang xem (nếu mở từ trang sản phẩm), tin nhắn và số đo đã nhập.
@@ -73,10 +73,17 @@ interface AssistantUiState {
   chart: { rows: SizeChartRow[]; categoryName: string } | null
   /** Yêu cầu chọn size trên trang sản phẩm (ProductDetailMain lắng nghe); id đổi mỗi lần để yêu cầu lặp lại vẫn kích hoạt. */
   sizeRequest: { size: string; id: number } | null
+  /** Đang chờ trợ lý trả lời (khoá nút gửi để không gửi chồng yêu cầu). */
+  pending: boolean
   setOpen: (open: boolean) => void
   /** Mở khung chat; nếu mở từ một sản phẩm khác với lần trước thì bắt đầu lại hội thoại. */
   openChat: (product?: AssistantProduct) => void
   push: (message: ChatMessage) => void
+  /** Thay nội dung một tin nhắn đã có (dùng khi câu trả lời đang được truyền về từng mẩu). */
+  updateMessage: (id: string, parts: ChatMessage["parts"], error?: boolean) => void
+  /** Ghi kết quả khách đã quyết định vào thẻ xác nhận có id này (để thẻ giữ nguyên trạng thái khi khung chat được dựng lại). */
+  resolveConfirm: (confirmationId: string, resolved: ConfirmResolved) => void
+  setPending: (pending: boolean) => void
   setMeasurements: (m: Partial<Record<MeasureField, number>>) => void
   setFit: (fit: FitChoice) => void
   setChart: (chart: { rows: SizeChartRow[]; categoryName: string } | null) => void
@@ -92,6 +99,7 @@ export const useAssistantUi = create<AssistantUiState>((set, get) => ({
   fitChosen: false,
   chart: null,
   sizeRequest: null,
+  pending: false,
   setOpen: (open) => set({ open }),
   openChat: (product) => {
     const next = product ?? null
@@ -103,6 +111,17 @@ export const useAssistantUi = create<AssistantUiState>((set, get) => ({
     )
   },
   push: (message) => set((s) => ({ messages: [...s.messages, message] })),
+  updateMessage: (id, parts, error) =>
+    set((s) => ({ messages: s.messages.map((m) => (m.id === id ? { ...m, parts, ...(error ? { error: true } : {}) } : m)) })),
+  resolveConfirm: (confirmationId, resolved) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.parts.some((p) => p.type === "confirm" && p.data.id === confirmationId)
+          ? { ...m, parts: m.parts.map((p) => (p.type === "confirm" && p.data.id === confirmationId ? { ...p, resolved } : p)) }
+          : m,
+      ),
+    })),
+  setPending: (pending) => set({ pending }),
   setMeasurements: (m) => set((s) => ({ measurements: { ...s.measurements, ...m } })),
   setFit: (fit) => set({ fit, fitChosen: true }),
   setChart: (chart) => set({ chart }),

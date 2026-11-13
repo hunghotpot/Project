@@ -78,6 +78,7 @@ model User {
   orders             Order[]
   refreshTokens      RefreshToken[]
   orderStatusChanges OrderStatusHistory[]
+  aiChatLogs         AiChatLog[]
 }
 
 // Refresh token opaque: chỉ lưu SHA-256 của token (không lưu token gốc).
@@ -153,8 +154,9 @@ model Product {
   updatedAt   DateTime @updatedAt
 
   category Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  images   ProductImage[]
-  variants ProductVariant[]
+  images    ProductImage[]
+  variants  ProductVariant[]
+  embedding ProductEmbedding?
 
   @@index([categoryId, isActive])
   @@index([isActive, basePrice])
@@ -196,6 +198,70 @@ model ProductVariant {
   @@unique([productId, size, color])
   @@index([size])
   @@index([color])
+}
+
+// Vector ngữ nghĩa của sản phẩm cho Semantic Search (docs/ai/01-data-for-ai.md mục 3).
+// Cột `embedding` là vector(1024) theo bge-m3; Prisma Client không đọc/ghi kiểu này nên dùng $queryRaw / $executeRaw.
+// Chỉ mục HNSW (vector_cosine_ops) nằm trong file migration vì Prisma không biểu diễn được.
+model ProductEmbedding {
+  productId       String   @id
+  embedding       Unsupported("vector(1024)")
+  content         String // đúng chuỗi đã embed
+  contentHash     String // sha256(content | model | templateVersion)
+  model           String
+  dimensions      Int
+  templateVersion Int      @default(1)
+  embeddedAt      DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+// Đoạn kiến thức (chăm sóc, size, chính sách, phối đồ) nạp từ docs/ai/knowledge/*.md cho RAG (docs/ai/03-rag-advisor.md mục 1).
+// Khoá tự nhiên là (source, title). `embedding` là vector(1024) theo bge-m3; chỉ đọc/ghi bằng SQL thô như ProductEmbedding.
+// Không có chỉ mục vector: vài chục đoạn thì quét tuần tự đã đủ nhanh và tránh thêm lệch schema với Prisma.
+model KnowledgeChunk {
+  id              String   @id
+  source          String // tên file nguồn, ví dụ "care.md"
+  type            String // care | styling | policy | faq
+  title           String
+  content         String
+  metadata        Json
+  embedding       Unsupported("vector(1024)")
+  contentHash     String // sha256(tiêu đề + nội dung | model | templateVersion): đổi thì phải embed lại
+  model           String
+  templateVersion Int      @default(1)
+  updatedAt       DateTime @default(now())
+
+  @@unique([source, title])
+  @@index([type])
+}
+
+// Nhật ký một lượt chat với trợ lý (docs/ai/05-safety-and-guardrails.md mục 7). Mức 0 luôn ghi số liệu kỹ thuật và tên tool;
+// `params` chỉ có ở mức 1 trở lên (đã che PII); `userText`/`replyText` chỉ có ở mức 2 và bị xoá sau vài ngày (purge).
+model AiChatLog {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+  userId     String
+  level      Int
+  model      String
+  status     String // ok | fallback | error | bare_confirmation
+  claim      String? // lý do cổng kiểm chứng can thiệp (catalog, size, order...), nếu có
+  retries    Int      @default(0)
+  latencyMs  Int
+  ttftMs     Int?
+  tokensIn   Int      @default(0)
+  tokensOut  Int      @default(0)
+  tools      Json // [{ name, ok, code?, ms }]
+  params     Json? // [{ name, input }] đã che PII (mức >= 1)
+  error      String?
+  userText   String? // mức 2
+  replyText  String? // mức 2
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
 }
 
 // Số đo tham chiếu (cm / kg) phục vụ tư vấn size bằng AI.

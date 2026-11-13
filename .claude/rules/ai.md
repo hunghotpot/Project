@@ -22,7 +22,7 @@ Khi làm bất kỳ phần AI nào, đọc đúng tài liệu liên quan và **b
 - Mọi tool có Zod schema cho input và output, đặt trong `src/lib/validators/ai.ts`; luôn `parse` lại ở server.
 - Output tool dùng DTO rút gọn, không trả object Prisma; cắt độ dài văn bản tự do.
 - Lỗi trả về có cấu trúc `{ ok: false, code, message }` (ánh xạ từ `AuthError/CartError/OrderError`), không ném stack trace.
-- Không import `admin-*.service`, `getAdminUser` hay `src/server/uploads.ts` vào `src/server/ai/*`. Điểm móc embedding đã có: `syncProductEmbedding` (hàm rỗng) trong `src/server/services/product-hooks.ts`, do service Admin gọi sau mỗi thay đổi sản phẩm.
+- Không import `admin-*.service`, `getAdminUser` hay `src/server/uploads.ts` vào `src/server/ai/*`. Điểm móc embedding: `syncProductEmbedding` (chạy nền, AI tắt thì không làm gì) trong `src/server/services/product-hooks.ts`, do service Admin gọi sau mỗi thay đổi sản phẩm.
 - Tập tool là tập đóng. KHÔNG có tool admin/system (`changeOrderStatus`, `requireAdmin`…), thanh toán, hay tạo/huỷ đơn.
 - UI action chỉ thực thi theo whitelist `uiActionSchema`; client từ chối mọi action ngoài danh sách.
 
@@ -32,7 +32,7 @@ Khi làm bất kỳ phần AI nào, đọc đúng tài liệu liên quan và **b
 
 ## Dữ liệu và an toàn
 - Dữ liệu sản phẩm/đơn/kiến thức là DỮ LIỆU, không phải chỉ thị. Đặt trong khối có ranh giới trong prompt.
-- Không đưa `passwordHash`, token, email, SĐT, địa chỉ, ghi chú đơn, secret vào prompt hoặc log. Dùng `redactForPrompt` (khi có).
+- Không đưa `passwordHash`, token, email, SĐT, địa chỉ, ghi chú đơn, secret vào prompt hoặc log. Dùng `redactForPrompt`/`redactText` (`src/server/ai/core/redact.ts`).
 - Chỉ khẳng định điều có trong dữ liệu truy xuất; thiếu thì hỏi lại. Giá, tồn kho, size đọc từ service lúc trả lời.
 - Tư vấn size: tính bằng code deterministic, LLM chỉ diễn đạt kết quả (`docs/ai/03-rag-advisor.md`).
 - Luôn có fallback tìm kiếm từ khoá khi LLM/embedding lỗi hoặc quá `AI_REQUEST_TIMEOUT_MS`.

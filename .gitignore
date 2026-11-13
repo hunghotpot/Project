@@ -79,3 +79,7 @@ CLAUDE.local.md
 /tmp/
 /scratch/
 Desktop.ini
+
+# ghi chú tiến độ cá nhân (chủ dự án tự theo dõi, không đưa lên repo)
+docs/TODO.md
+docs/ai/08-progress-notes.md

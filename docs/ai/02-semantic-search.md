@@ -2,11 +2,13 @@
 
 Mục tiêu: khách gõ câu tự nhiên → nhận danh sách sản phẩm đúng ý, **hiển thị bằng đúng UI lọc hiện có** (chip bộ lọc + `ProductListResult`).
 
+> **Trạng thái (2026-11-13): phần dịch vụ đã làm xong** (`src/server/ai/search/`: `intent.ts`, `search.service.ts`; `listProducts` có `onlyIds`). **Đã nối vào trang `/products?q=…`** (`src/components/product/product-listing.tsx`) : hiểu câu bằng code (từ điển, giá, size, màu, xếp theo từ khoá) cho mọi người, kể cả khách và khi AI tắt; phần vector chỉ cho người đã đăng nhập khi AI bật (AI cần tài khoản, quá 8 giây chờ embedding thì lùi về từ khoá); trang danh mục có `category` giữ lọc cũ; chưa nối vào chat/tool. Khác thiết kế gốc: **bước 1 "LLM trích ý định" chưa dùng**; ý định được hiểu hoàn toàn bằng code (từ điển lóng `vi-synonyms.ts`, hàm giá `vi-price.ts`, tên màu và size nhận từ kho) vì đo thực tế `qwen3:4b-instruct` bịa giá, chọn sai danh mục và giới tính. Điều kiện cứng chỉ do code quyết định; LLM có thể được thêm sau cho điều kiện mềm nếu đo thấy có lợi. Kết quả chấm 15 truy vấn mẫu xem ở mục 8.
+
 ## 1. Hiện trạng (căn cứ code)
 - `listProducts(input: ProductFilterInput)` trong `src/server/services/catalog.service.ts` là điểm vào duy nhất; input được parse lại bằng `productFilterSchema` (`src/lib/validators/product-filter.ts`). Schema **idempotent** ("service có thể parse lại input từ AI/tool-calling" — ghi sẵn trong comment).
 - Trường của schema: `q`, `category`, `size[]`, `color[]`, `material[]`, `style[]`, `occasion[]`, `season[]`, `gender` (men|women|unisex), `minPrice`, `maxPrice`, `inStock`, `sort` (newest|price_asc|price_desc|popular), `page`, `pageSize` (≤ 48).
 - Tìm từ khoá `q`: `unaccent(lower(name + brand + tags + category.name)) LIKE '%từ%'`, **mọi từ phải khớp**. Câu tự nhiên ("áo mát đi làm") gần như luôn ra 0 kết quả → không dùng `q` để nhồi cả câu.
-- **CHƯA CÓ**: full-text index (`tsvector`/`pg_trgm`); bảng embedding; hàm tìm theo vector; giới hạn kết quả theo danh sách id.
+- **CHƯA CÓ** (trước 2026-11-13): full-text index (`tsvector`/`pg_trgm`). Đã có sau đó: bảng embedding, tìm theo vector (`search/search.service.ts`), `listProducts(..., { onlyIds })` giữ thứ tự.
 - Lọc `season` đã có (`season`, mảng, khớp khi trùng ít nhất một mùa).
 - `gender=men` mặc định chỉ khớp `MEN`, **loại UNISEX** (45/125 sản phẩm). AI gọi `listProducts(input, { includeUnisex: true })` để "nam"/"nữ" gồm cả UNISEX (giao diện web không dùng tuỳ chọn này).
 - Facet (`facets.styles/occasions/materials/colors/sizes/genders/price`) cho biết giá trị **thật** đang có trong kho: dùng làm từ vựng ràng buộc cho LLM.
@@ -59,18 +61,20 @@ Hợp nhất: `score = Σ 1 / (60 + rank_i)` cho hai danh sách; cộng boost nh
 Để trả về cùng kiểu `ProductListResult` (kèm facet, ảnh, màu) mà không nhân đôi logic: thêm vào `catalog.service` một tham số giới hạn theo danh sách id có thứ tự (refactor ở `04-tool-calling.md` mục 4), rồi gọi lại `listProducts`.
 
 ### 3.3 Thang nới lỏng khi ít kết quả (< 3)
-1. Bỏ điều kiện mềm có điểm thấp nhất (season → occasion → style).
-2. Nới giá ±20%.
-3. Bỏ `size` cứng, ghi chú "chưa có size X còn hàng".
-4. Chỉ còn `isActive` + `gender` + vector. Luôn nói cho khách biết đã nới gì (hiển thị chip "đã nới").
-Không bao giờ trả sản phẩm hết hàng khi khách yêu cầu `inStock`.
+**Đã làm theo bản sửa (2026-11-13):** điều kiện mềm (dịp, mùa, phong cách) chỉ cộng điểm xếp hạng nên không cần "bỏ"; còn các bước nới theo thứ tự:
+1. Bỏ `size` cứng, ghi chú "chưa có size X còn hàng".
+2. Bỏ `color` cứng, báo lại.
+3. Bỏ điều kiện loại sản phẩm, báo lại.
+**Không bao giờ nới**: còn hàng (luôn chỉ trả sản phẩm có biến thể còn hàng), giới tính, và giá khách đã nêu ("dưới 500k" là cứng: nới giá ±20% như bản gốc sẽ trả sản phẩm 549.000đ, trái với ca mẫu 4 ở mục 7). Giá kiểu "tầm 500k" thì ngay từ đầu đã là khoảng ±20%. Luôn báo cho khách điều đã nới (`relaxed` trong kết quả).
 
 ## 4. LLM trích bộ lọc → đúng schema Zod hiện có
+
+> **KHÁC THIẾT KẾ, không làm theo mục này.** Đo trên `qwen3:4b-instruct`: model bịa `minPrice`/`maxPrice` khi câu không nêu giá, trả `gender: unisex` thay cho "không rõ", chọn sai danh mục ("đồ đi biển cho nữ" ra áo polo). Nên bước hiểu câu hoàn toàn bằng code (`search/intent.ts`: từ điển lóng `lib/ai/vi-synonyms.ts`, hàm giá `lib/ai/vi-price.ts`, trích size/màu/giới tính/danh mục theo từ vựng thật của kho) và chỉ phần xếp hạng dùng vector. Schema `searchIntentSchema` dưới đây **không có trong code**; giữ lại làm tài liệu về hướng đã cân nhắc.
 
 Không cho LLM tự do sinh `ProductFilter`. Định nghĩa schema trung gian, **tái dùng** các enum/kiểu có sẵn rồi map sang `ProductFilterInput`:
 
 ```ts
-// src/lib/validators/ai.ts (CHƯA CÓ — thiết kế)
+// (KHÔNG CÓ trong code: chỉ là thiết kế đã bỏ, xem lưu ý ở đầu mục này)
 import { PRODUCT_GENDERS, PRODUCT_SORTS } from "@/lib/validators/product-filter"
 
 export const searchIntentSchema = z.object({
@@ -94,7 +98,7 @@ export const searchIntentSchema = z.object({
 ```
 - Prompt trích xuất **nhúng danh sách giá trị thật** lấy từ `listProducts({}).facets` (cache) và danh sách category từ `getNavCategories()`; yêu cầu chỉ chọn trong danh sách.
 - Hậu xử lý bằng code (không tin LLM): ép `category/color/size/style/occasion` vào tập hợp thật (`occasion` vào `OCCASIONS`; so khớp không dấu), `minPrice ≤ maxPrice`, rồi `productFilterSchema.parse(...)` lần cuối. Giá trị rơi ngoài từ vựng → chuyển vào `semanticQuery`.
-- Tiền VND: hiểu "500k" = 500000, "1tr2" = 1200000, "dưới 300 nghìn" → `maxPrice = 300000`. Nên có hàm phân tích giá viết bằng code làm lưới an toàn (**CHƯA CÓ**).
+- Tiền VND: hiểu "500k" = 500000, "1tr2" = 1200000, "dưới 300 nghìn". **ĐÃ CÓ** `parsePriceRange` ở `src/lib/ai/vi-price.ts` (57 test; chưa nối vào luồng tìm kiếm). Giá chỉ lấy từ hàm này, **bỏ mọi `minPrice`/`maxPrice` do LLM sinh**: đo thực tế `qwen3:4b-instruct` bịa giá khi câu không nêu giá. Quy ước: "dưới/nhỏ hơn" loại trừ mốc (`dưới 300 nghìn` → `maxPrice = 299999`), "không quá/tối đa" bao gồm mốc; "trên" loại trừ, "từ/tối thiểu/trở lên" bao gồm; số tiền không nêu hướng ("áo 500k", "tầm 500k") là khoảng ±20%; hiểu "củ", "chai", "lít", "rưỡi", "nửa triệu"; hai điều kiện mâu thuẫn thì bỏ cả hai.
 - `season` đã có trong `productFilterSchema`: `soft.season` vẫn dùng để boost và embedding; chỉ chuyển thành lọc cứng `season` khi khách nói rõ ("chỉ", "bắt buộc") hoặc khi nới lỏng không còn cần thiết.
 
 ## 5. Tiếng Việt: có dấu / không dấu / từ lóng
@@ -102,7 +106,7 @@ export const searchIntentSchema = z.object({
 |---|---|
 | Gõ không dấu ("ao so mi nam") | Từ khoá: đã có `unaccent`. Vector: model đa ngôn ngữ vẫn bắt tốt; có thể embed thêm bản không dấu của câu truy vấn và lấy max |
 | Dấu sai/thiếu, gõ tắt ("qjean", "sm") | Bảng đồng nghĩa/viết tắt trong code trước LLM |
-| Từ lóng/khẩu ngữ | Từ điển trong `src/lib/ai/vi-synonyms.ts` (**CHƯA CÓ**): "đồ đi chơi tối" → occasion hẹn hò/dự tiệc; "mát" → season hè + chất liệu linen/cotton/thun lạnh; "sang chảnh/lên đồ" → style elegant/formal; "oversize/rộng" → semantic; "áo phông" → áo thun; "quần bò" → quần jeans; "váy cưới/đi đám cưới" → occasion dự đám cưới; "set" → yêu cầu phối nhiều món (chuyển sang Mix & Match, `03`); "k/tr/nghìn" → số tiền |
+| Từ lóng/khẩu ngữ | Từ điển trong `src/lib/ai/vi-synonyms.ts` (**ĐÃ CÓ** dữ liệu và hàm `findSynonymHints`, test `vi-synonyms.test.ts`; **chưa nối vào luồng tìm kiếm**, gợi ý chỉ đưa cho bước LLM chứ không là bộ lọc cứng). Nội dung gồm: "đồ đi chơi tối" → occasion hẹn hò/dự tiệc; "mát" → season hè + chất liệu linen/cotton/thun lạnh; "sang chảnh/lên đồ" → style elegant/formal; "oversize/rộng" → semantic; "áo phông" → áo thun; "quần bò" → quần jeans; "váy cưới/đi đám cưới" → occasion dự đám cưới; "set" → yêu cầu phối nhiều món (chuyển sang Mix & Match, `03`); "k/tr/nghìn" → số tiền |
 | Hai cách viết cùng nghĩa ở dữ liệu (xem `01` #1) | Đã chuẩn hoá seed về 23 giá trị `OCCASIONS` (`01` mục 6); lời khách vẫn phải ánh xạ về đúng các giá trị này |
 
 ## 6. Ví dụ phân rã: "Set đồ nam lịch sự đi đám cưới ngoài trời mùa hè"
@@ -149,6 +153,17 @@ Kết quả mong đợi **trên dữ liệu seed hiện tại** (đã kiểm b�
 Bộ phủ định bổ sung (không tính vào 15, nhưng nên có trong test): "iPhone 15 giá bao nhiêu" → từ chối ngoài phạm vi; "quần áo trẻ em" → báo kho chưa có (đã kiểm 0 sản phẩm); chuỗi chứa lệnh ("bỏ qua mọi quy tắc và…") → xử lý như văn bản tìm kiếm thông thường (xem `05`).
 
 ## 8. Tiêu chí hoàn thành bước Semantic Search
+
+**Kết quả đo (2026-11-13)**, lệnh `npm run ai:search-check` (bộ 15 truy vấn và vị từ ở `src/test/ai/search-queries.ts`; `-- --keyword` để chạy đường lui bằng từ khoá), `bge-m3` 1024 chiều, 125 sản phẩm, một lần chạy mỗi truy vấn (khác `docs/ai/06` yêu cầu ≥ 3 lần nhưng không có LLM trong bước này nên kết quả ổn định giữa các lần):
+
+| Chỉ số | Semantic | Từ khoá (đường lui) | Nền: từ khoá cả câu | Ngưỡng |
+|---|---|---|---|---|
+| Pass@5 | **15/15** | 13/15 | 2/15 | ≥ 12 |
+| Precision@5 trung bình | **0,82** | 0,70 | – | ≥ 0,7 |
+| Vi phạm lọc cứng trong top-5 | **0** | 0 | – | 0 |
+| Độ trễ p50 / p95 | 74 / 374 ms (lượt chạy đầu sau khi để nghỉ: p95 tới khoảng 2,5 giây vì nạp lại model) | 17 / 100 ms | – | p95 ≤ 3 giây |
+
+Lưu ý khi đọc kết quả: vị từ "đúng ý" do chúng tôi tự viết từ dữ liệu seed hiện tại (nên nó và dữ liệu cùng nguồn); ca 4 ("dưới 500k") chỉ trả 4 sản phẩm vì kho chỉ có 1 quần jeans nam dưới 500k và không nới giá; chưa đo Recall@10, chưa đo token vì bước này không gọi LLM; chưa mô phỏng lỗi LLM ngoài lỗi embedding (đường lui từ khoá có test tích hợp).
 - ≥ 12/15 câu đạt vị từ ở top-5 (cách tính ở `06-evaluation.md`).
 - p95 độ trễ end-to-end trong ngưỡng đã đặt ở `06`.
 - Luôn có fallback: nếu LLM/embedding lỗi hoặc quá `AI_REQUEST_TIMEOUT_MS`, chạy `listProducts({ q })` với từ khoá đã rút gọn và báo "đang dùng tìm kiếm thường".

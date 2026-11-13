@@ -21,7 +21,7 @@ PostgreSQL (image pgvector/pgvector:pg16), Redis (sau), Zod, TanStack Query, Zus
 - Commit nhỏ, message dạng conventional commits.
 - Sau mỗi tính năng: chạy `npm run lint && npm run typecheck`.
 - Ngôn ngữ UI: tiếng Việt. Code, tên biến: tiếng Anh.
-- Trang Admin (`src/app/(admin)/admin/`): dựng theo `docs/admin-ui.md`; mọi Server Action/route Admin gọi `getAdminUser()` TRƯỚC rồi mới validate và gọi `admin-*.service` (service không tự kiểm quyền); chỉ tải ảnh qua `/api/admin/uploads`.
+- Trang Admin (`src/app/(admin)/admin/`): dựng theo `docs/features.md` (mục "Quy ước dựng màn hình Admin"); mọi Server Action/route Admin gọi `getAdminUser()` TRƯỚC rồi mới validate và gọi `admin-*.service` (service không tự kiểm quyền); chỉ tải ảnh qua `/api/admin/uploads`.
 - Giai đoạn AI: theo `.claude/rules/ai.md` và thiết kế trong `docs/ai/*.md` (kiến trúc hiện tại: `docs/architecture.md`).
 
 ## Lệnh

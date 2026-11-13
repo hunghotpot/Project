@@ -101,3 +101,59 @@ describe("nghĩa của gender", () => {
     expect(r.items).toHaveLength(4)
   })
 })
+
+describe("onlyIds (kết quả tìm kiếm đã xếp hạng)", () => {
+  const idOf = async (key: string) => (await db.product.findFirstOrThrow({ where: { slug: `${RUN}-${key}` } })).id
+  const run = async (keys: string[], input: Parameters<typeof listProducts>[0] = {}, opts: Parameters<typeof listProducts>[1] = {}) => {
+    const ids = await Promise.all(keys.map(idOf))
+    return listProducts({ category: slug, pageSize: 48, ...input }, { ...opts, onlyIds: ids })
+  }
+  const keysOf = (r: Awaited<ReturnType<typeof listProducts>>) => r.items.map((i) => i.name.replace(`${RUN}-`, ""))
+
+  it("giữ đúng thứ tự danh sách, không theo sort mặc định", async () => {
+    const r = await run(["women-all", "men-winter", "unisex-summer"])
+    expect(keysOf(r)).toEqual(["women-all", "men-winter", "unisex-summer"])
+    expect(r.total).toBe(3)
+  })
+
+  it("bỏ qua sort: price_asc không đổi thứ tự", async () => {
+    const r = await run(["unisex-autumn", "men-summer"], { sort: "price_asc" })
+    expect(keysOf(r)).toEqual(["unisex-autumn", "men-summer"])
+  })
+
+  it("vẫn áp các bộ lọc khác và giữ thứ tự của phần còn lại", async () => {
+    const r = await run(["women-all", "men-winter", "unisex-summer", "men-summer"], { gender: "men", season: ["hè"] }, { includeUnisex: true })
+    expect(keysOf(r)).toEqual(["unisex-summer", "men-summer"])
+    expect(r.total).toBe(2)
+  })
+
+  it("phân trang theo thứ tự danh sách; total và pageCount tính trên phần lọc được", async () => {
+    const keys = ["men-winter", "women-all", "unisex-autumn"]
+    const p1 = await run(keys, { pageSize: 2, page: 1 })
+    const p2 = await run(keys, { pageSize: 2, page: 2 })
+    expect(keysOf(p1)).toEqual(["men-winter", "women-all"])
+    expect(keysOf(p2)).toEqual(["unisex-autumn"])
+    expect(p1.total).toBe(3)
+    expect(p1.pageCount).toBe(2)
+  })
+
+  it("id trùng chỉ tính một lần, id không tồn tại bị bỏ", async () => {
+    const a = await idOf("men-summer")
+    const b = await idOf("women-all")
+    const r = await listProducts({ category: slug }, { onlyIds: [a, a, "khong-ton-tai", b] })
+    expect(keysOf(r)).toEqual(["men-summer", "women-all"])
+    expect(r.total).toBe(2)
+  })
+
+  it("danh sách rỗng: không có kết quả", async () => {
+    const r = await listProducts({ category: slug }, { onlyIds: [] })
+    expect(r.items).toEqual([])
+    expect(r.total).toBe(0)
+    expect(r.pageCount).toBe(1)
+  })
+
+  it("facet chỉ tính trên các sản phẩm trong danh sách", async () => {
+    const r = await run(["men-summer", "men-winter"])
+    expect(r.facets.genders).toEqual([{ value: "men", count: 2 }])
+  })
+})

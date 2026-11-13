@@ -1,15 +1,20 @@
 import "server-only"
+import { getAiStatus } from "@/server/ai/core/env"
+import { syncOneProduct } from "@/server/ai/search/sync-embeddings"
 
 /*
  * Điểm móc cho tầng AI (docs/ai/01-data-for-ai.md mục 4).
  * Các service Admin gọi hàm này SAU KHI thao tác sản phẩm đã commit (tạo / sửa / ẩn-hiện / xoá / chỉnh tồn),
- * ngoài transaction; lỗi bị nuốt và ghi log nên không bao giờ làm hỏng thao tác chính.
+ * ngoài transaction.
  *
- * Hiện là hàm RỖNG. Khi làm bước Embedding (docs/TODO.md C1.3), thân hàm sẽ:
- *  - sản phẩm còn tồn tại: dựng văn bản, so `contentHash` rồi chỉ embed lại khi đổi;
- *  - sản phẩm đã bị xoá (không còn bản ghi): bỏ embedding tương ứng.
- * Job `npm run ai:embed` vẫn bù những lần hàm này lỗi.
+ * Việc embed chạy NỀN (không await): gọi model có thể mất vài chục giây, không được làm chậm thao tác của Admin.
+ * AI tắt thì không làm gì. Lỗi chỉ ghi log; `npm run ai:embed` bù những lần lỗi.
+ * Sản phẩm đã bị xoá: bản ghi embedding tự xoá theo (ON DELETE CASCADE) nên không cần xử lý riêng.
  */
 export async function syncProductEmbedding(productId: string): Promise<void> {
-  void productId
+  const status = getAiStatus()
+  if (!status.enabled) return
+  void syncOneProduct(productId, status.config).catch((e) => {
+    console.error(`[ai] syncProductEmbedding(${productId}) lỗi:`, e)
+  })
 }

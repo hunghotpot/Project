@@ -10,11 +10,10 @@ import { SIZE_GUIDE_DESCRIPTION, SizeChartTable } from "@/components/product/siz
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { getSizeAdviceAction } from "@/app/actions/size-advice"
+import { useAssistantChat } from "@/hooks/use-assistant"
 import { nextMessageId, useAssistantUi, type FitChoice } from "@/stores/assistant-ui"
 import type { AssistantActions, ChatMessage, MeasureField, MessagePart } from "@/types/assistant"
 
-const NOT_CONNECTED =
-  "Trợ lý chưa được kết nối nên mình chưa trả lời được. Bạn có thể dùng ô tìm kiếm hoặc bộ lọc ở trang sản phẩm trong lúc chờ nhé."
 const OPEN_A_PRODUCT = "Bạn mở một sản phẩm rồi bấm \"Tư vấn size\", mình sẽ tính theo bảng size của đúng sản phẩm đó nhé."
 const ADVICE_FAILED = "Mình chưa tính được size lúc này, bạn thử lại sau nhé."
 
@@ -47,10 +46,12 @@ function describe(m: Partial<Record<MeasureField, number>>): string {
 
 // Nút tròn ở góc phải dưới; bấm thì mở ô chat chữ nhật đứng ngay phía trên (mobile: toàn màn hình).
 // Màu xám đen (slate-700) cho bớt nổi so với màu thương hiệu và khác màu footer (bg-ink) để không chìm khi cuộn xuống cuối trang. Tư vấn size chạy thật qua server action (tính bằng code, không LLM);
-// mọi câu hỏi khác nhận lại "chưa kết nối" cho tới khi có backend AI. Đóng ô chat không xoá hội thoại.
+// câu hỏi khác gửi tới /api/ai/chat qua useAssistantChat (có tool và kho kiến thức, xem docs/ai/00-overview.md).
+// Đóng ô chat không xoá hội thoại.
 export function AssistantWidget() {
   const { enabled, authenticated } = useAssistantAccess()
   const ui = useAssistantUi()
+  const chat = useAssistantChat()
   const { open, setOpen, messages, push, product } = ui
   const [chartOpen, setChartOpen] = useState(false)
   const pathname = usePathname()
@@ -96,21 +97,20 @@ export function AssistantWidget() {
     }
   }
 
-  function send(text: string) {
-    sayText("user", text)
-    sayText("assistant", NOT_CONNECTED)
-  }
+  const send = (text: string) => void chat.send(text)
 
   const actions: AssistantActions = {
     onQuickReply: (value, label) => {
-      sayText("user", label)
       if (isFit(value)) {
+        sayText("user", label)
         ui.setFit(value)
         void advise(useAssistantUi.getState().measurements, value)
       } else if (value === "size") {
+        sayText("user", label)
         sayText("assistant", OPEN_A_PRODUCT)
       } else {
-        sayText("assistant", NOT_CONNECTED)
+        // Các gợi ý khác ("Phối đồ đi làm", "Cách giặt áo linen"...) gửi nguyên nhãn như khách tự gõ.
+        send(label)
       }
     },
     onSubmitMeasurements: (values) => {
@@ -124,6 +124,9 @@ export function AssistantWidget() {
       if (window.matchMedia("(max-width: 639px)").matches) setOpen(false)
     },
     onViewSizeChart: ui.chart ? () => setChartOpen(true) : undefined,
+    // Thẻ xác nhận của tool ghi (thêm vào giỏ): chỉ nút trên thẻ mới gọi /api/ai/confirm, không qua model.
+    onConfirm: (id) => void chat.decide(id, "confirm"),
+    onCancelConfirm: (id) => void chat.decide(id, "cancel"),
   }
 
   return (
@@ -155,7 +158,7 @@ export function AssistantWidget() {
               <XIcon />
             </Button>
           </header>
-          <AssistantPanel messages={messages} onSend={send} actions={actions} />
+          <AssistantPanel messages={messages} onSend={send} actions={actions} busy={ui.pending} />
         </div>
       )}
 

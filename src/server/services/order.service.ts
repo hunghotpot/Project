@@ -501,6 +501,17 @@ export async function listOrders(userId: string, input: OrderListFilterInput = {
 }
 
 /** Chi tiết đơn + lịch sử trạng thái + tình trạng còn hàng từng dòng. null nếu không phải đơn của user. */
+/**
+ * Tra đơn theo mã đơn ("FS-20261110-0003", không phân biệt hoa thường) của CHÍNH người dùng này (cho tool AI tra cứu đơn).
+ * Mã sai định dạng hoặc đơn của người khác đều trả null như nhau, không lộ đơn có tồn tại hay không.
+ */
+export async function getOrderByCode(userId: string, code: string): Promise<OrderDetailView | null> {
+  const normalized = code.trim().toUpperCase()
+  if (!/^FS-\d{8}-\d{4,}$/.test(normalized)) return null
+  const row = await db.order.findFirst({ where: { code: normalized, userId }, select: { id: true } })
+  return row ? getOrderDetail(userId, row.id) : null
+}
+
 export async function getOrderDetail(userId: string, orderId: string): Promise<OrderDetailView | null> {
   const row = await db.order.findFirst({
     where: { id: orderId, userId }, // quyền: chỉ chủ đơn

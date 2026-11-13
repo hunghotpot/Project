@@ -1,5 +1,12 @@
+# Hạ tầng cho môi trường PHÁT TRIỂN: PostgreSQL (có pgvector) và Redis. Mật khẩu bên dưới là mật khẩu dev, KHÔNG dùng cho production
+# (production dùng PostgreSQL/Redis do nhà cung cấp quản lý, đặt `DATABASE_URL` và `REDIS_URL` bằng biến môi trường thật).
+# Hai cổng được mở ra máy chủ để app và test chạy ngoài Docker kết nối được: đừng mở các cổng này ra Internet.
+#
+# Ollama (model AI) KHÔNG nằm trong file này: nó chạy trực tiếp trên máy để dùng GPU (xem README, mục "Trợ lý AI", và docs/ai/07-env-and-setup.md).
+# Không có Ollama thì web vẫn chạy bình thường, chỉ ẩn trợ lý và tìm kiếm ngữ nghĩa (AI_ENABLED=false).
 services:
   postgres:
+    # pgvector/pgvector (không phải postgres thường): cần extension `vector` cho tìm kiếm ngữ nghĩa và kho kiến thức của trợ lý AI.
     image: pgvector/pgvector:pg16
     container_name: fashion-postgres
     restart: unless-stopped
@@ -18,6 +25,8 @@ services:
       retries: 10
 
   redis:
+    # Dùng cho giới hạn tốc độ và ngân sách token của trợ lý AI, và kho xác nhận "thêm vào giỏ" (dùng một lần, hết hạn 5 phút).
+    # Không có Redis (hoặc Redis lỗi) thì code tự rơi về bộ nhớ của tiến trình, vẫn chạy nhưng mất khi khởi động lại.
     image: redis:7-alpine
     container_name: fashion-redis
     restart: unless-stopped

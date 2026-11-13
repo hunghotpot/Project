@@ -1,6 +1,6 @@
 # Kiến trúc hệ thống (hiện trạng code)
 
-Tài liệu mô tả đúng code đang có (viết 2026-11-10, cập nhật 2026-11-12: thêm tầng Admin). Chỗ nào chưa có ghi **CHƯA CÓ**. Quy ước kiến trúc gốc: `CLAUDE.md`, `.claude/rules/project.md`. Trạng thái tính năng: `docs/status-customer.md`.
+Tài liệu mô tả đúng code đang có (viết 2026-11-10, cập nhật 2026-11-12: thêm tầng Admin; 2026-11-14: thêm tầng AI). Chỗ nào chưa có ghi **CHƯA CÓ**. Quy ước kiến trúc gốc: `CLAUDE.md`, `.claude/rules/project.md`. Trạng thái và mô tả tính năng: `docs/features.md`.
 
 ## 1. Sơ đồ các lớp
 
@@ -29,7 +29,7 @@ Tài liệu mô tả đúng code đang có (viết 2026-11-10, cập nhật 2026
 └───────────────┬──────────────────────────────────────────────────────────────┘
                 │ Prisma Client (src/server/db.ts)
 ┌───────────────▼──────────────────────────────────────────────────────────────┐
-│ PostgreSQL 16 (+ extension vector, unaccent)  ·  Redis (CHƯA được code dùng)   │
+│ PostgreSQL 16 (+ extension vector, unaccent)  ·  Redis (giới hạn tốc độ AI)     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -37,7 +37,7 @@ Thư mục phụ trợ: `src/lib/` (hàm thuần dùng chung server/client: `car
 
 **Tầng Admin** (từ 2026-11-12) dùng đúng các lớp trên: giao diện ở `src/app/(admin)/admin/**` + `src/components/admin/**`, Server Action `src/app/actions/admin-*.ts`, route `/api/admin/uploads`, nghiệp vụ ở `src/server/services/admin-*.service.ts`. Service Admin **không tự kiểm quyền**: tầng gọi phải kiểm bằng `getAdminUser()` (`src/server/auth/admin.ts`) trước khi gọi. Chi tiết ở mục 2.1 và 3.7.
 
-Giai đoạn AI sẽ thêm một **tầng vào thứ ba** (route `/api/ai/*`) đứng cùng cấp với Route/Action, và cũng chỉ gọi service (xem `docs/ai/00-overview.md`).
+**Tầng AI** (từ 2026-11-13) là tầng vào thứ ba: route `/api/ai/*` đứng cùng cấp với Route/Action, đọc cookie rồi truyền `userId` vào `src/server/ai/*`, và cũng chỉ gọi service (xem `docs/ai/00-overview.md`).
 
 ## 2. Tầng vào hiện có
 
@@ -62,6 +62,8 @@ Giai đoạn AI sẽ thêm một **tầng vào thứ ba** (route `/api/ai/*`) đ
 | `/api/payment/vnpay/return` | GET | công khai (chỉ hiển thị) | `payment.verifyReturn`, `findOrderIdByCode` |
 | `/api/payment/vnpay/ipn` | GET | chữ ký VNPay | `payment.handleIPN` |
 | `/api/cron/expire-orders` | GET | `Authorization: Bearer CRON_SECRET` | `payment.expireUnpaidVnpayOrders` |
+| `/api/ai/chat` | POST | đăng nhập (khách 401), cờ AI bật (tắt 503) | `ai/chat/handler.handleChat` (giới hạn tốc độ, ngân sách token, model và tập tool đóng 10 tool (9 đọc/giao diện + `addToCart` chỉ tạo thẻ xác nhận); trả luồng NDJSON gồm chữ, thẻ và hành động giao diện) |
+| `/api/ai/confirm` | POST | đăng nhập (khách 401), cờ AI bật (tắt 503) | `ai/chat/confirm.handleConfirm` (bước 2 của `addToCart`: lấy bản ghi xác nhận dùng một lần rồi `addItem`; nơi duy nhất tầng AI ghi giỏ) |
 
 Trang Server Component (`src/app/(shop)/**`) gọi service trực tiếp để đọc dữ liệu (catalog, giỏ, đơn). `src/middleware.ts` chặn `/account/*` (cần đăng nhập) và `/admin/*` (cần role ADMIN); layout `/admin` đọc lại DB bằng `requireAdmin()`.
 
@@ -159,14 +161,24 @@ Nhận `admin: { userId }` làm ngữ cảnh. Input công khai được `parse` 
 | `admin-customer.service` | `listCustomers`, `getCustomerSummary`, `getCustomerDetail`, `lockCustomer`, `unlockCustomer`, `createCustomerByAdmin` | `AdminCustomerError` |
 | `admin-dashboard.service` | `getDashboardStats` | – |
 
-Ghi chú: `product-hooks.ts` có hàm rỗng `syncProductEmbedding(productId)`, được `admin-product.service` gọi sau mỗi thay đổi sản phẩm/tồn kho (điểm móc cho embedding). Doanh thu = đơn `PAID` hoặc COD đã giao, loại huỷ/hoàn tiền, tính theo ngày tạo đơn. Hạng VIP suy ra từ tổng chi tiêu (`src/lib/customer-tier.ts`), không lưu cột.
+Ghi chú: `product-hooks.ts` có `syncProductEmbedding(productId)`, được `admin-product.service` gọi sau mỗi thay đổi sản phẩm/tồn kho; hàm chạy nền (AI tắt thì không làm gì) và gọi `ai/search/sync-embeddings` để cập nhật bảng `ProductEmbedding`. Doanh thu = đơn `PAID` hoặc COD đã giao, loại huỷ/hoàn tiền, tính theo ngày tạo đơn. Hạng VIP suy ra từ tổng chi tiêu (`src/lib/customer-tier.ts`), không lưu cột.
 
-### 3.8 `src/server/ai/advisor/` — tầng AI hiện có (chưa dùng LLM)
-`size.ts`: hàm thuần `getSizeRecommendation(input)` (đo độ lệch so với bảng size, trả trạng thái `recommended`/`between_two`/`out_of_range`/`need_info`/`no_chart` (kiểu `SizeStatus` ở `src/types/assistant.ts`)). `size.service.ts`: `adviseSizeForProduct(input)` đọc `getProductBySlug` + `getSizeChartInfo`, suy loại sản phẩm từ slug category lá bằng `sizeKindOf`, trả `SizeAdviceResult | null` (null nếu sản phẩm không tồn tại/ngừng bán). Chỉ đọc, không ghi, không đọc cookie. Test: `size.test.ts`. Các phần AI còn lại **CHƯA CÓ** (xem `docs/TODO.md` mục B).
+### 3.8 `src/server/ai/` — tầng AI (tầng service, không đọc cookie)
+Chia theo tính năng, `core/` dùng chung (cây thư mục đầy đủ và luồng một lượt chat: `docs/ai/00-overview.md`). Chỉ gọi service sẵn có, không truy vấn Prisma trong `tools/` và `chat/`.
+
+| Thư mục | Vai trò | Gọi tới |
+|---|---|---|
+| `core/` | Cấu hình (`env`), model, embedding (có cache và circuit breaker), giới hạn tốc độ + ngân sách token (Redis), che PII, nhật ký `AiChatLog`, kho xác nhận | Ollama, Redis, bảng `AiChatLog` |
+| `search/` | Hiểu câu tìm kiếm bằng code, xếp hạng vector + từ khoá (`findRankedProducts`, `searchProducts`), đồng bộ embedding sản phẩm | `listProducts` (`onlyIds`), bảng `ProductEmbedding` |
+| `advisor/` | Tư vấn size (`size.ts` thuần, `size.service.ts`), kho kiến thức (`knowledge.service.ts`), Mix & Match (`outfit.ts` thuần, `outfit.service.ts`) | `getProductBySlug`, `getSizeChartInfo`, bảng `KnowledgeChunk` |
+| `tools/` | Tập đóng 10 tool, mỗi tool một file mỏng (validate Zod rồi gọi service) | `catalog`, `cart` (chỉ đọc), `order` (chỉ đọc, ràng buộc `userId`) |
+| `chat/` | `handler.ts` (một lượt chat), `claims.ts` (cổng kiểm chứng), `confirm.ts` (nơi DUY NHẤT ghi giỏ, sau khi khách bấm Xác nhận), `prompts.ts` | `addItem` (chỉ trong `confirm.ts`) |
+
+Đường vào: `POST /api/ai/chat` và `POST /api/ai/confirm` (mục 2). Test chạy không cần model; các bộ đo dùng model thật là `npm run ai:*-check` (không nằm trong `npm test`).
 
 ## 4. Dữ liệu (Prisma)
 
-Model: `User` (có `status` ACTIVE/LOCKED), `RefreshToken`, `Address`, `Category` (cây 2 cấp), `Product`, `ProductImage`, `ProductVariant`, `SizeChart`, `Cart`, `CartItem`, `OrderSequence`, `Order`, `OrderItem`, `OrderStatusHistory`. Extension `vector` và `unaccent` đã bật qua migration. **CHƯA CÓ**: bảng/cột embedding, bảng hội thoại AI, bảng khuyến mãi/voucher, bảng cấu hình hệ thống, vai trò nhân viên (chỉ CUSTOMER/ADMIN). Danh mục là cây Nam / Nữ / Unisex + Phụ kiện (20 category, mỗi sản phẩm một category lá theo giới tính). Lọc theo mùa đã có: `productFilterSchema` có trường `season` (khớp khi trùng ít nhất một mùa), đi vào URL và hiện thành chip; chưa có ô chọn mùa trong panel lọc.
+Model: `User` (có `status` ACTIVE/LOCKED), `RefreshToken`, `Address`, `Category` (cây 2 cấp), `Product`, `ProductImage`, `ProductVariant`, `SizeChart`, `Cart`, `CartItem`, `OrderSequence`, `Order`, `OrderItem`, `OrderStatusHistory`. Extension `vector` và `unaccent` đã bật qua migration. `ProductEmbedding` (vector 1024 chiều cho tìm kiếm ngữ nghĩa, từ 2026-11-13). Bảng cho AI: `KnowledgeChunk` (kho kiến thức, vector 1024 chiều, 2026-11-13) và `AiChatLog` (nhật ký hội thoại 3 mức, 2026-11-14; xoá user thì xoá nhật ký theo). **CHƯA CÓ**: bảng khuyến mãi/voucher, bảng cấu hình hệ thống, vai trò nhân viên (chỉ CUSTOMER/ADMIN). Danh mục là cây Nam / Nữ / Unisex + Phụ kiện (20 category, mỗi sản phẩm một category lá theo giới tính). Lọc theo mùa đã có: `productFilterSchema` có trường `season` (khớp khi trùng ít nhất một mùa), đi vào URL và hiện thành chip; chưa có ô chọn mùa trong panel lọc.
 
 ## 5. Những điểm cần nhớ khi thêm tầng AI
 1. Mọi logic mới đi qua service; route AI chỉ validate + gọi service (cùng quy tắc `project.md`).

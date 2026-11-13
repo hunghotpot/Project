@@ -4,6 +4,8 @@
  * Khi có src/lib/validators/ai.ts thì thay bằng z.infer của các schema đó.
  */
 
+import type { ProductCardLite } from "@/lib/validators/ai"
+
 export type SizeStatus = "recommended" | "between_two" | "need_info" | "out_of_range" | "no_chart"
 
 export type MeasureField = "heightCm" | "weightKg" | "chestCm" | "waistCm" | "hipCm"
@@ -65,17 +67,28 @@ export interface QuickReplyOption {
   value: string
 }
 
+/**
+ * Khách đã quyết định gì trên thẻ xác nhận. Lưu trong tin nhắn (store) chứ không trong state của thẻ: thẻ bị dựng lại khi đóng/mở
+ * khung chat, state cục bộ sẽ mất và nút Xác nhận/Huỷ hiện lại dù đã dùng.
+ * `confirming`: đã gửi, chờ server; `added`: đã thêm vào giỏ; `cancelled`: khách huỷ; `failed`: server từ chối (hết hạn, hết hàng…).
+ */
+export type ConfirmResolved = "confirming" | "added" | "cancelled" | "failed"
+
 export type MessagePart =
   | { type: "text"; text: string }
-  | { type: "size"; data: SizeRecommendationView }
+  /** `noSelect`: thẻ do chat dựng (không gắn với trang sản phẩm đang mở) nên không có nút "Chọn size". */
+  | { type: "size"; data: SizeRecommendationView; noSelect?: boolean }
+  | { type: "products"; items: ProductCardLite[] }
   | { type: "outfit"; data: OutfitView }
-  | { type: "confirm"; data: ConfirmView }
+  | { type: "confirm"; data: ConfirmView; resolved?: ConfirmResolved }
   | { type: "quickReplies"; options: QuickReplyOption[] }
 
 export interface ChatMessage {
   id: string
   role: "user" | "assistant"
   parts: MessagePart[]
+  /** Câu báo lỗi thay cho câu trả lời thật; không gửi lại cho model làm ngữ cảnh. */
+  error?: boolean
 }
 
 /** Hành động người dùng thực hiện trên thẻ. Tầng gọi (sau này là hook nối AI SDK) quyết định xử lý thế nào. */

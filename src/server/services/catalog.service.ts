@@ -275,10 +275,35 @@ async function loadFacets(f: ProductFilters, scope: Scope, includeUnisex: boolea
   }
 }
 
+/** Nhánh `onlyIds` của listProducts: lọc theo `where`, giữ thứ tự `ids`, rồi phân trang. */
+async function listInGivenOrder(
+  where: Prisma.ProductWhereInput,
+  ids: string[],
+  f: ProductFilters,
+  scope: Scope,
+  includeUnisex: boolean
+) {
+  const passing = new Set((await db.product.findMany({ where, select: { id: true } })).map((r) => r.id))
+  const ordered = ids.filter((id) => passing.has(id))
+  const pageIds = ordered.slice((f.page - 1) * f.pageSize, f.page * f.pageSize)
+  const [rows, facets] = await Promise.all([
+    db.product.findMany({ where: { id: { in: pageIds } }, select: productCardSelect }),
+    loadFacets(f, scope, includeUnisex),
+  ])
+  const position = new Map(pageIds.map((id, i) => [id, i]))
+  rows.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0))
+  return [rows, ordered.length, facets] as const
+}
+
 /** Tuỳ chọn ngoài bộ lọc URL, không hiện trên giao diện web. */
 export interface ListProductsOptions {
   /** Lọc giới tính "nam"/"nữ" gồm cả sản phẩm unisex (dùng cho tìm kiếm AI). Mặc định false: so khớp đúng như giao diện web. */
   includeUnisex?: boolean
+  /**
+   * Chỉ lấy các sản phẩm có id trong danh sách này (vẫn áp mọi bộ lọc khác) và GIỮ THỨ TỰ của danh sách, bỏ qua `sort`
+   * (dùng cho kết quả tìm kiếm ngữ nghĩa đã xếp hạng). Phân trang theo thứ tự đó; id trùng chỉ tính một lần.
+   */
+  onlyIds?: string[]
 }
 
 /**
@@ -291,20 +316,24 @@ export async function listProducts(
 ): Promise<ProductListResult> {
   const f = productFilterSchema.parse(input)
   const includeUnisex = opts.includeUnisex ?? false
+  const onlyIds = opts.onlyIds ? [...new Set(opts.onlyIds)] : undefined
   const scope = await resolveScope(f)
+  if (onlyIds) scope.searchIds = scope.searchIds ? onlyIds.filter((id) => scope.searchIds?.includes(id)) : onlyIds
   const where = productWhere(f, scope, undefined, includeUnisex)
 
-  const [rows, total, facets] = await Promise.all([
-    db.product.findMany({
-      where,
-      orderBy: orderBy(f.sort),
-      skip: (f.page - 1) * f.pageSize,
-      take: f.pageSize,
-      select: productCardSelect,
-    }),
-    db.product.count({ where }),
-    loadFacets(f, scope, includeUnisex),
-  ])
+  const [rows, total, facets] = onlyIds
+    ? await listInGivenOrder(where, onlyIds, f, scope, includeUnisex)
+    : await Promise.all([
+        db.product.findMany({
+          where,
+          orderBy: orderBy(f.sort),
+          skip: (f.page - 1) * f.pageSize,
+          take: f.pageSize,
+          select: productCardSelect,
+        }),
+        db.product.count({ where }),
+        loadFacets(f, scope, includeUnisex),
+      ])
 
   return {
     items: rows.map(toProductCard),

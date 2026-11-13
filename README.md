@@ -1,6 +1,6 @@
 ﻿# Fashion E-Commerce with AI Shopping Concierge
 
-Website thương mại điện tử thời trang. Giai đoạn sau sẽ tích hợp AI Shopping Concierge (Tool Calling gọi lại các service trong `src/server/services`).
+Website thương mại điện tử thời trang kèm **AI Shopping Concierge**: tìm kiếm ngữ nghĩa, trợ lý chat biết tư vấn size, phối đồ, tra đơn và thêm vào giỏ (có xác nhận). Trợ lý gọi lại đúng các service trong `src/server/services` với quyền của người dùng đang đăng nhập, chạy local qua Ollama (xem mục [Trợ lý AI](#trợ-lý-ai-tuỳ-chọn)).
 
 ## Stack
 
@@ -8,8 +8,9 @@ Next.js 15 (App Router, TypeScript strict) · Tailwind CSS · shadcn/ui · Prism
 
 ## Yêu cầu
 
-- Node.js 20+ và npm
+- Node.js 22+ và npm (gói `ai` của Vercel AI SDK yêu cầu Node 22 trở lên)
 - Docker Desktop (chạy PostgreSQL + Redis)
+- (Tuỳ chọn, cho trợ lý AI) [Ollama](https://ollama.com), nên có GPU từ 6 GB VRAM
 
 ## Chạy dự án từ đầu
 
@@ -19,10 +20,12 @@ npm install
 cp .env.example .env        # Windows PowerShell: Copy-Item .env.example .env
 npm run db:up               # khởi động PostgreSQL + Redis (Docker phải đang chạy)
 npx prisma generate         # sinh Prisma Client
-npx prisma migrate dev      # tạo bảng + bật extension (unaccent)
+npx prisma migrate deploy   # áp các migration có sẵn: tạo bảng + bật extension (vector, unaccent)
 npm run db:seed             # nạp dữ liệu mẫu (xem mục "Dữ liệu seed")
 npm run dev                 # http://localhost:3000
 ```
+
+> Dùng `migrate deploy` (không phải `migrate dev`) để dựng DB từ đầu. `migrate dev` chỉ dùng khi bạn đổi `schema.prisma`; nó luôn đề nghị tạo thêm một migration **xoá chỉ mục HNSW** của vector (Prisma không biết chỉ mục này vì phải viết tay): hãy từ chối (Ctrl+C), đừng đặt tên migration. Chi tiết: `docs/ai/01-data-for-ai.md` mục 3.
 
 Sau `cp`, mở `.env` và đặt `JWT_SECRET` thành chuỗi ngẫu nhiên từ 32 ký tự trở lên (ví dụ `openssl rand -base64 32`). Các biến `VNP_*`, `CRON_SECRET` có thể để trống khi dev: thiếu `VNP_*` thì phương thức VNPay bị khoá ở trang thanh toán. `BANK_*` mặc định là dữ liệu mẫu.
 
@@ -46,124 +49,61 @@ Kiểm tra sau khi cài: `npm run lint && npm run typecheck && npm test` (test t
 | `npm test` | Chạy test (Vitest) |
 | `npm run db:up` / `npm run db:down` | Bật / tắt PostgreSQL + Redis (dữ liệu giữ trong Docker volume) |
 | `npm run db:seed` | Seed dữ liệu |
+| `npm run ai:*` | Công cụ của trợ lý AI (nạp vector, đo, xem nhật ký): xem mục [Trợ lý AI](#trợ-lý-ai-tuỳ-chọn) |
 
 Xoá cả dữ liệu: `docker compose down -v`.
 
-## Xác thực
+## Trợ lý AI (tuỳ chọn)
 
-Tự xây bằng `jose` + `bcryptjs`, không dùng thư viện auth ngoài.
+Trợ lý mua sắm chạy **hoàn toàn local qua [Ollama](https://ollama.com)**, không cần API key. Không cài Ollama thì web vẫn chạy bình thường (ẩn nút trợ lý, tìm kiếm theo từ khoá).
 
-- **Token:** access token (JWT, 15 phút) và refresh token (chuỗi ngẫu nhiên, 7 ngày) nằm trong cookie `httpOnly`, `sameSite=lax`. `secure` chỉ bật ở production.
-- **Refresh token** chỉ lưu SHA-256 trong bảng `RefreshToken`, rotate mỗi lần refresh. Token đã thu hồi mà bị dùng lại thì cả chuỗi phiên bị thu hồi.
-- **Middleware** (`src/middleware.ts`): `/account/*` cần đăng nhập, `/admin/*` cần role `ADMIN`. Access token hết hạn mà còn refresh token thì tự đi qua `/api/auth/refresh`.
-- **Rate limit đăng nhập:** in-memory, khoá 15 phút sau 5 lần sai theo cặp IP + email (chạy nhiều instance thì chuyển sang Redis).
-- **Biến môi trường:** `JWT_SECRET` tối thiểu 32 ký tự.
-- **Code:** logic ở `src/server/services/auth.service.ts` và `address.service.ts`; helper `getCurrentUser()`, `requireUser()`, `requireAdmin()` ở `src/server/auth/session.ts`; Server Actions ở `src/app/actions/`.
-- **Trang:** `/login`, `/register`, `/account/profile` (thông tin tài khoản xem/sửa tại chỗ, đơn hàng gần đây, đổi mật khẩu), `/account/addresses` (sổ địa chỉ). "Đơn hàng của tôi" xem mục bên dưới; "Trung tâm trợ giúp" trong menu tài khoản đã có theo Figma nhưng chưa có trang.
-- **API:** `GET /api/auth/me` (user hiện tại), `GET /api/auth/refresh` (do middleware gọi).
+| Thành phần | Chọn | Ghi chú |
+| --- | --- | --- |
+| Model hội thoại + gọi công cụ | `qwen3:4b-instruct` (~2,5 GB) | bản không "suy nghĩ", đủ nhanh trên GPU 6 GB |
+| Model embedding | `bge-m3` (1024 chiều) | tìm kiếm ngữ nghĩa và kho kiến thức; lưu bằng pgvector |
 
-## Danh sách sản phẩm
+**Bật trợ lý** (sau khi đã chạy `db:up`, `migrate deploy`, `db:seed` ở trên):
 
-- **Trang:** `/products` (tìm kiếm, tất cả sản phẩm) và `/categories/[slug]` (category cha gồm cả sản phẩm của category con).
-- **Bộ lọc nằm hoàn toàn trong URL**, ví dụ `?size=M&size=L&color=Đen&minPrice=100000&inStock=1&sort=price_asc&page=2`. Một schema Zod duy nhất `src/lib/validators/product-filter.ts` dùng để parse URL và gọi service; giá trị sai tự rơi về mặc định. Phía client đọc/ghi URL qua hook `useProductFilters()`.
-- **Service:** `listProducts(filters)` trong `catalog.service.ts` trả `items`, `total`, `pageCount` và `facets` (đếm theo size, màu, chất liệu, phong cách, dịp, giới tính, khoảng giá). Facet bỏ qua chính bộ lọc của chiều đó nên chọn Size M vẫn thấy số lượng của L, XL.
-- **Tìm kiếm không dấu** dùng extension PostgreSQL `unaccent` (đã bật trong migration `enable_unaccent`).
-- **Sắp xếp `popular`** hiện dùng cờ `isFeatured` làm tín hiệu thay thế vì chưa có dữ liệu bán hàng.
-- **Kiểm tra N+1:** chạy `PRISMA_QUERY_LOG=1 npm run dev` để in mọi câu SQL; số câu SQL mỗi trang cố định (14) dù `pageSize` là 1, 12 hay 48.
+```bash
+ollama pull qwen3:4b-instruct
+ollama pull bge-m3
+# trong .env: bỏ comment 6 dòng [BẮT BUỘC] của khối "Trợ lý AI" (giá trị mẫu đã đúng), rồi khởi động lại npm run dev
+npm run ai:embed            # nạp vector cho sản phẩm + kho kiến thức (lần đầu ~30 giây; chạy lại sau mỗi lần db:seed)
+```
 
-## Trang chi tiết sản phẩm
+Trợ lý cần đăng nhập (dùng tài khoản demo ở trên). Trợ lý **không đặt hàng, không thanh toán**: chỉ tìm sản phẩm, tư vấn size, phối đồ, tra đơn, điều khiển giao diện, và thêm vào giỏ **sau khi khách bấm Xác nhận** trên thẻ.
 
-- **Route:** `/products/[slug]`; slug không tồn tại hoặc `isActive = false` trả 404. Có `generateMetadata` và JSON-LD `schema.org/Product` (AggregateOffer theo giá thấp/cao nhất của biến thể).
-- **Chọn biến thể:** logic thuần hàm ở `src/lib/product-variants.ts` (có test). Chỉ chọn được tổ hợp màu × size tồn tại và còn hàng; option hết hàng mờ + gạch chéo, tổ hợp không tồn tại chỉ mờ. Giá và tồn kho theo biến thể đang chọn.
-- **Giỏ hàng:** `ProductDetailMain` có ô số lượng và hai nút "Thêm vào giỏ hàng" / "Mua ngay", nhận prop `onAddToCart` và `onBuyNow` (`{ variantId, quantity }`); `ProductDetailConnected` nối hai prop này với giỏ hàng (xem mục "Giỏ hàng").
-- **Bảng size:** lấy từ `SizeChart` của category (ưu tiên bảng riêng của brand), ẩn nút nếu category chưa có bảng.
-- **Chăm sóc:** DB chưa có trường riêng nên `src/lib/care.ts` gợi ý chung theo chất liệu.
-- **Ảnh theo màu:** `imagesForColor()` đã sẵn, nhưng bảng `ProductImage` chưa có cột màu nên hiện chưa tác dụng. Cần thêm cột `color` (nullable) vào `ProductImage` để bật.
+| Lệnh | Việc | Cần |
+| --- | --- | --- |
+| `npm run ai:embed` | Nạp/cập nhật vector sản phẩm và kiến thức (chỉ làm lại phần đổi) | Ollama, DB |
+| `npm run ai:search-check` | Đo tìm kiếm ngữ nghĩa trên 15 truy vấn mẫu | Ollama, DB đã embed |
+| `npm run ai:chat-check` | Chạy bộ câu hỏi mẫu qua chat thật, in công cụ đã gọi (`-- "câu hỏi"` hoặc `-- --convo "câu 1" "câu 2"`) | Ollama, DB |
+| `npm run ai:attack-check` | Bộ tấn công (prompt injection, lộ dữ liệu, thao tác nguy hiểm…) | Ollama, DB |
+| `npm run ai:logs` | Xem nhật ký hội thoại (`-- --bad`, `-- --stats`, `-- --purge`) | DB |
 
-## Giỏ hàng
+Các lệnh `ai:*-check` gọi model thật nên **không nằm trong `npm test`** (`npm test` chạy được khi không có Ollama). Thiết kế, số đo và giới hạn đã biết: [docs/ai/](docs/ai/00-overview.md) (đọc `00-overview` trước).
 
-- **Service:** `src/server/services/cart.service.ts` — `getCart`, `addItem`, `updateQuantity` (số lượng 0 = xoá dòng), `removeItem`, `clearCart`. Mọi hàm nhận `ctx` (`{ userId }`) và không đọc cookie/headers, nên Route Handler và AI tool-calling dùng lại được.
-- **Chỉ cho user đã đăng nhập:** khách không thêm/sửa/xoá được (API trả 401 `UNAUTHENTICATED`), `/cart` chuyển sang `/login?next=/cart`, icon giỏ và nút "Thêm vào giỏ hàng" dẫn khách sang đăng nhập rồi quay lại đúng trang. Không có giỏ khách (đã bỏ khỏi code và DB); trợ lý AI cũng chỉ dành cho người đã đăng nhập.
-- **Tồn kho:** thêm/sửa không được vượt `stock`, lỗi có mã (`INSUFFICIENT_STOCK`, `OUT_OF_STOCK`...) và thông báo tiếng Việt. Chỉ kiểm tra, không giữ chỗ; trừ kho nằm ở bước đặt hàng.
-- **Cảnh báo:** giỏ trả kèm cảnh báo khi giá đã đổi so với lúc thêm (`CartItem.priceAtAdd`), tồn kho giảm dưới số lượng, hết hàng hoặc sản phẩm ngừng bán.
-- **API:** `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/[variantId]`.
-- **Giao diện:** TanStack Query với optimistic update (`src/hooks/use-cart.ts`), cart drawer mở khi bấm icon giỏ và sau khi thêm sản phẩm, trang `/cart`. Voucher và nút "Tiến hành thanh toán" đã có theo Figma nhưng bị khoá cho tới khi có backend voucher và trang checkout.
+## Chức năng
 
-## Thanh toán & đơn hàng
+Mô tả chi tiết từng trang và chức năng nằm ở [docs/features.md](docs/features.md).
 
-- **Luồng:** giỏ → `/checkout` (bắt buộc đăng nhập) → COD: `/orders/[id]/success`; chuyển khoản: `/orders/[id]/payment` (mã VietQR) → `/orders/[id]/success`. VNPAY (thẻ) đi qua cổng VNPay, xem mục "Thanh toán VNPay" bên dưới.
-- **`createOrder` (src/server/services/order.service.ts)** chạy trong MỘT `prisma.$transaction`: đọc giỏ, kiểm tra địa chỉ, trừ kho bằng `updateMany({ stock >= qty })` (nguyên tử, chống oversell khi nhiều người mua cùng lúc), tạo `Order` + `OrderItem` (snapshot giá/tên/size/màu), cấp mã đơn, xoá giỏ. Thiếu hàng ở bất kỳ dòng nào thì rollback toàn bộ và báo rõ từng sản phẩm.
-- **`cancelOrder`:** chỉ khi `PENDING`/`CONFIRMED`, hoàn tồn kho trong cùng transaction.
-- **Mã đơn:** `FS-YYYYMMDD-0001`, số thứ tự theo ngày (giờ Việt Nam) lấy từ bảng `OrderSequence` bằng upsert increment nên không trùng.
-- **Phí vận chuyển:** `src/lib/shipping.ts` — miễn phí từ 500.000đ, dưới mức đó 30.000đ.
-- **VietQR:** `src/server/payment/vietqr.ts` tự sinh payload chuẩn NAPAS 247 (có test CRC). Đặt `BANK_NAME`, `BANK_BIN`, `BANK_ACCOUNT_NO`, `BANK_ACCOUNT_NAME` trong `.env`; giá trị mặc định chỉ là dữ liệu mẫu từ Figma.
-- **Chưa có:** tự động đối soát tiền chuyển khoản (Admin xác nhận tay đã nhận tiền ở `/admin/orders/[id]`; trước đó đơn vẫn chờ thanh toán), voucher/giảm giá, tự huỷ đơn chuyển khoản quá hạn (chỉ đơn VNPAY mới có hạn 15 phút).
-- **Test:** `order.service.integration.test.ts` chạy trên PostgreSQL thật (cần `npm run db:up`), gồm 2 đơn cùng mua biến thể còn 1 sản phẩm và 5 người tranh 2 sản phẩm.
-
-## Thanh toán VNPay
-
-Dành cho đơn có `paymentMethod = VNPAY`. Tích hợp API 2.1.0, ký HMAC-SHA512.
-
-**Luồng:** đặt hàng (đơn `PENDING`, đã trừ kho) → `GET /api/payment/vnpay/pay?orderId=` ký URL rồi chuyển sang cổng VNPay → người dùng thanh toán → VNPay gọi **IPN** (server-to-server, nguồn sự thật) và đưa người dùng về **Return URL** (chỉ hiển thị kết quả, không đổi trạng thái).
-
-| Route | Vai trò |
-| --- | --- |
-| `GET /api/payment/vnpay/pay` | Cần đăng nhập. Ký URL thanh toán và chuyển hướng; dùng cả cho "Thanh toán lại". |
-| `GET /api/payment/vnpay/return` | Kiểm chữ ký rồi chuyển tới trang thành công hoặc trang "thanh toán không thành công". |
-| `GET /api/payment/vnpay/ipn` | VNPay gọi. Kiểm chữ ký + số tiền khớp đơn, cập nhật `paymentStatus`; **idempotent** (gọi lại trả `02`). |
-| `GET /api/cron/expire-orders` | Huỷ đơn VNPAY quá 15 phút chưa trả tiền và hoàn tồn kho. Cần header `Authorization: Bearer <CRON_SECRET>`. |
-
-**Cấu hình** (`.env`): `VNP_TMN_CODE`, `VNP_HASH_SECRET`, `VNP_URL` (mặc định sandbox), `VNP_RETURN_URL`, `CRON_SECRET`. Chưa đặt `VNP_TMN_CODE`/`VNP_HASH_SECRET` thì lựa chọn VNPAY bị khoá ở trang thanh toán. Secret và dữ liệu giao dịch không bao giờ được log.
-
-**Quy tắc trạng thái:** IPN thành công → `paymentStatus = PAID`, đơn `CONFIRMED`; giao dịch thất bại → `FAILED` (đơn vẫn `PENDING`, được thanh toán lại trong 15 phút); quá hạn (15 phút + 2 phút đệm cho IPN đến muộn) → đơn `CANCELLED`, hoàn tồn kho. Job huỷ chỉ chạm đơn chưa trả tiền nên không thể huỷ nhầm đơn vừa được thanh toán.
-
-### Chạy thử với sandbox
-
-1. Đăng ký tài khoản sandbox tại https://sandbox.vnpayment.vn/devreg/ — VNPay gửi email `Terminal ID (vnp_TmnCode)` và `Secret Key (vnp_HashSecret)`. Điền vào `.env`.
-2. Chạy `npm run dev`, thêm hàng vào giỏ, vào `/checkout`, chọn **Thẻ Tín dụng / Ghi nợ**, đặt hàng. Trang sẽ chuyển sang cổng VNPay sandbox.
-3. Chọn ngân hàng **NCB** và nhập thẻ thử theo tài liệu VNPay (https://sandbox.vnpayment.vn/apis/vnpay-demo/): số thẻ `9704198526191432198`, tên `NGUYEN VAN A`, ngày phát hành `07/15`, mã OTP `123456`. Đây là thẻ giả của sandbox; hãy đối chiếu lại với tài liệu VNPay nếu thông tin đổi.
-4. **IPN cần URL công khai.** VNPay không gọi được `localhost`. Hoặc dùng tunnel (ngrok, cloudflared) rồi khai báo URL IPN `https://<tunnel>/api/payment/vnpay/ipn` trong trang quản trị merchant sandbox (https://sandbox.vnpayment.vn/merchantv2/); hoặc, khi chạy local, copy phần query của URL Return và gọi tay vào IPN:
-   ```bash
-   curl "http://localhost:3000/api/payment/vnpay/ipn?<query của URL return>"
-   ```
-   Kết quả đúng là `{"RspCode":"00","Message":"Confirm Success"}`; gọi lần hai trả `{"RspCode":"02",...}`.
-5. Thử hết hạn: trong DB lùi `createdAt` của đơn VNPAY 30 phút, rồi gọi
-   ```bash
-   curl -H "Authorization: Bearer <CRON_SECRET>" http://localhost:3000/api/cron/expire-orders
-   ```
-   Đơn chuyển `CANCELLED`, tồn kho được hoàn lại. Trên môi trường thật, đặt lịch gọi route này mỗi vài phút (cron của hosting, GitHub Actions, scheduler...).
-
-Test: `payment.service.integration.test.ts` (PostgreSQL thật, dùng secret giả cố định trong `vitest.config.ts`) và `src/server/payment/vnpay.test.ts` (ký/kiểm chữ ký).
-
-## Trang Admin
-
-- **Vào:** đăng nhập bằng tài khoản ADMIN (xem bảng tài khoản demo) rồi mở `/admin` (menu tài khoản có mục "Trang quản trị"). Middleware chặn theo role, `layout` đọc lại DB bằng `requireAdmin()`; **mọi Server Action và route Admin còn phải tự kiểm quyền bằng `getAdminUser()`** (`src/server/auth/admin.ts`).
-- **Màn hình:** Tổng quan, Đơn hàng (+ chi tiết), Tồn kho & Sản phẩm, Danh mục, Bảng size, Khách hàng (+ chi tiết) chạy thật; **Voucher** và **Cài đặt hệ thống** chỉ là giao diện minh hoạ (chưa có backend, có biểu ngữ "chưa kết nối").
-- **Ảnh sản phẩm:** tải lên qua `POST /api/admin/uploads` (chỉ Admin; JPG/PNG/WebP kiểm bằng chữ ký file, tối đa 5MB và 4 ảnh/lần, tên file do server sinh), lưu ở `public/uploads/` (đã nằm trong `.gitignore`) và phục vụ qua `/uploads/<tên>`. Ảnh seed là ảnh giữ chỗ từ placehold.co.
-- **Khoá tài khoản khách:** `User.status` (ACTIVE/LOCKED); tài khoản bị khoá không đăng nhập hay refresh được, phiên cũ mất hiệu lực ngay.
-- **Code:** nghiệp vụ ở `src/server/services/admin-*.service.ts`; giao diện ở `src/app/(admin)/admin/` và `src/components/admin/`; quy ước dựng màn hình mới ở `docs/admin-ui.md`.
-- **Test:** test Server Action Admin dùng mock (quyền, input, lỗi); test service `admin-*.integration.test.ts` cần PostgreSQL (`npm run db:up`).
-
-## Đơn hàng của tôi
-
-- **Trang:** `/account/orders` (lọc theo trạng thái, tìm theo mã đơn/tên sản phẩm, phân trang; tất cả nằm trong URL `?status=&q=&page=`) và `/account/orders/[id]` (timeline trạng thái, sản phẩm, địa chỉ, thanh toán, hủy đơn, mua lại). Hai trang này không có sidebar nên `profile`/`addresses` nằm trong nhóm route `(panel)` (có sidebar), còn `orders` đứng riêng.
-- **Lịch sử trạng thái:** bảng `OrderStatusHistory` ghi mỗi lần đổi trạng thái (từ → sang, thời gian, người đổi `CUSTOMER`/`ADMIN`/`SYSTEM`, ghi chú/lý do) và luôn được ghi **trong cùng transaction** với lần đổi: tạo đơn, huỷ đơn (người dùng hoặc job hết hạn), IPN VNPay thành công, và `changeOrderStatus()`. Timeline dựng từ bảng này (`src/lib/order-timeline.ts`). Đơn cũ trước khi có bảng được backfill trong migration.
-- **`changeOrderStatus(orderId, to, actor, note)`** chuyển đơn tuần tự `PENDING → CONFIRMED → SHIPPING → DELIVERED` (không nhảy cóc, không đi lùi). Admin đổi trạng thái qua trang `/admin/orders` (xem mục "Trang Admin"), bọc bởi `adminChangeOrderStatus`.
-- **Quyền:** mọi hàm của `order.service` (`listOrders`, `getOrderDetail`, `cancelOrder`, `reorder`) ràng buộc `userId` ngay trong câu truy vấn; đơn của người khác không tìm thấy (trang trả 404, kể cả với tài khoản admin), không phụ thuộc vào UI.
-- **Hủy đơn:** chỉ khi `PENDING`/`CONFIRMED`; khoá dòng đơn rồi hoàn tồn kho, ghi lịch sử kèm lý do (tuỳ chọn) trong một transaction.
-- **Mua lại:** thêm các biến thể còn hàng của đơn cũ vào giỏ (cắt theo tồn kho, không vượt số còn lại, bỏ dòng hết hàng/ngừng bán và báo lý do) qua `cart.service.addItemsClamped`.
-- **Chạy test:** `order-history.integration.test.ts` chạy trên PostgreSQL thật (cần `npm run db:up`).
+| Chức năng | Tóm tắt | Chi tiết |
+| --- | --- | --- |
+| Xác thực | JWT + refresh token trong cookie `httpOnly`, middleware chặn `/account` và `/admin` | [xem](docs/features.md#xác-thực) |
+| Danh sách sản phẩm | `/products`, `/categories/[slug]`; bộ lọc nằm trong URL; tìm kiếm không dấu | [xem](docs/features.md#danh-sách-sản-phẩm) |
+| Chi tiết sản phẩm | Chọn màu × size, bảng size, thêm giỏ / mua ngay | [xem](docs/features.md#trang-chi-tiết-sản-phẩm) |
+| Giỏ hàng | Chỉ cho người đã đăng nhập; kiểm tồn kho; cảnh báo giá đổi | [xem](docs/features.md#giỏ-hàng) |
+| Thanh toán & đơn hàng | COD, chuyển khoản (VietQR); trừ kho nguyên tử trong một transaction | [xem](docs/features.md#thanh-toán--đơn-hàng) |
+| Thanh toán VNPay | Ký HMAC-SHA512, IPN idempotent, tự huỷ đơn quá 15 phút; cách chạy thử sandbox | [xem](docs/features.md#thanh-toán-vnpay) |
+| Trang Admin | Đơn hàng, kho, danh mục, bảng size, khách hàng; Voucher và Cài đặt mới là giao diện minh hoạ | [xem](docs/features.md#trang-admin) |
+| Đơn hàng của tôi | Lọc, tìm, timeline trạng thái, huỷ đơn, mua lại | [xem](docs/features.md#đơn-hàng-của-tôi) |
+| Trợ lý AI | Tìm kiếm ngữ nghĩa, tư vấn size, phối đồ, thêm vào giỏ có xác nhận | [mục Trợ lý AI](#trợ-lý-ai-tuỳ-chọn), [docs/ai/](docs/ai/00-overview.md) |
 
 ## Dữ liệu seed
 
 `npm run db:seed` **xoá toàn bộ dữ liệu hiện có** rồi nạp lại (từ chối chạy khi `NODE_ENV=production`). Kết quả cố định giữa các lần chạy.
 
-Tài khoản mẫu (chỉ dùng cho dev, mật khẩu được hash bằng bcrypt, cost 10):
-
-| Vai trò | Email | Mật khẩu |
-| --- | --- | --- |
-| ADMIN | `admin@example.com` | `Admin@123456` |
-| CUSTOMER | `customer@example.com` | `Customer@123456` |
+Tài khoản mẫu: xem bảng **Tài khoản demo** ở mục "Chạy dự án từ đầu" (mật khẩu được hash bằng bcrypt, cost 10).
 
 Nội dung: 20 category (cây Nam / Nữ / Unisex + Phụ kiện), 125 sản phẩm, 378 ảnh giữ chỗ (placehold.co, ghi tên sản phẩm; ảnh thật tải lên qua trang Admin), 1.113 biến thể size × màu (một số hết hàng), 83 dòng size chart.
 
@@ -185,15 +125,17 @@ src/
   middleware.ts         # chặn /account, /admin; refresh token
   app/                  # routes (App Router): (shop), (auth), (admin), api/, uploads/, actions/ = Server Actions
   components/{ui,layout,home,product,cart,checkout,orders,auth,account,admin,assistant}
-  server/               # chỉ chạy phía server: db.ts, services/* (kể cả admin-*), auth/*, cart/*, payment/*, ai/*, uploads.ts
+  server/               # chỉ chạy phía server: db.ts, services/* (kể cả admin-*), auth/*, cart/*, payment/*, uploads.ts
+    ai/                 #   tầng AI: core/ (env, model, giới hạn, nhật ký…), search/, advisor/, tools/, chat/
   lib/{validators,utils,auth}  # Zod schema, helper thuần, hằng số
   types/                # kiểu dùng chung (catalog, order, address)
   test/                 # fake DB và fixture cho Vitest
   hooks/  stores/       # React hooks, Zustand stores
 prisma/{schema.prisma,seed.ts,seed-data/,migrations/}
-docs/                   # architecture.md, status-customer.md, admin-ui.md, TODO.md, ai/* (thiết kế AI), design/admin/* (ảnh Figma)
+docs/                   # architecture.md, features.md (mô tả cửa hàng: khách hàng và Admin), ai/* (thiết kế, số đo và giới hạn của trợ lý AI)
+scripts/ai/             # lệnh npm run ai:* (nạp vector, các bộ đo, xem nhật ký)
 .claude/rules/          # quy ước kiến trúc cho Claude Code
 docker-compose.yml      # PostgreSQL (pgvector) + Redis
 ```
 
-Quy ước kiến trúc chi tiết: xem [CLAUDE.md](CLAUDE.md), `.claude/rules/project.md` và `.claude/rules/ai.md` (phần AI). Việc cần làm tiếp: `docs/TODO.md`.
+Quy ước kiến trúc chi tiết: xem [CLAUDE.md](CLAUDE.md), `.claude/rules/project.md` và `.claude/rules/ai.md` (phần AI).

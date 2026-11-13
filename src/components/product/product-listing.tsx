@@ -7,20 +7,60 @@ import { ProductFilterPanel } from "@/components/product/product-filter-panel"
 import { ProductPagination } from "@/components/product/product-pagination"
 import { ResultsFrame } from "@/components/product/results-frame"
 import { MobileFilterSheet, SortSelect } from "@/components/product/product-toolbar"
+import { SmartSearchNote, type SmartSearchSummary } from "@/components/product/smart-search-note"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   parseProductFilters,
   serializeProductFilters,
   type SearchParamsLike,
 } from "@/lib/validators/product-filter"
+import { getAiStatus } from "@/server/ai/core/env"
+import { describeIntent } from "@/server/ai/search/describe-intent"
+import { findRankedProducts, type RankedProducts } from "@/server/ai/search/search.service"
+import { allowSmartSearch, SMART_SEARCH_LIMITED_NOTICE } from "@/server/ai/search/smart-search-limit"
+import { getCurrentUser } from "@/server/auth/session"
 import { listProducts } from "@/server/services/catalog.service"
 
 const GRID = "grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 sm:gap-x-6 xl:grid-cols-3 2xl:grid-cols-4"
 
-// Header-sidebar-grid cùng cần một kết quả: cache() gộp thành 1 lần chạy listProducts / request.
-const getListing = cache((qs: string, category: string | undefined) => {
+/** Quá hạn này thì bỏ embedding và dùng tìm kiếm từ khoá, để trang không bị treo khi Ollama chậm hoặc đang nạp model. */
+const SMART_SEARCH_TIMEOUT_MS = 8000
+
+/**
+ * Câu tìm kiếm (không kèm danh mục cố định) luôn đi qua bước hiểu câu bằng code: từ điển lóng, giá, size, màu, xếp hạng theo từ khoá.
+ * Phần vector (gọi model qua Ollama) chỉ dành cho người đã đăng nhập khi AI bật (AI cần tài khoản, docs/ai/00-overview.md mục 5);
+ * khách hoặc AI tắt thì không gọi model nào. Trang danh mục (có `category`) giữ cách lọc cũ vì kết quả xếp hạng là toàn kho.
+ */
+async function rankQuery(q: string | undefined, category: string | undefined): Promise<RankedProducts | null> {
+  if (!q || category) return null
+  const status = getAiStatus()
+  const user = status.enabled ? await getCurrentUser() : null
+  // Vượt giới hạn tốc độ của tìm kiếm thông minh thì vẫn tìm được, chỉ không dùng vector (kèm ghi chú).
+  const limited = !!user && !(await allowSmartSearch(user.id))
+  const config = status.enabled && user && !limited ? { ...status.config, timeoutMs: Math.min(status.config.timeoutMs, SMART_SEARCH_TIMEOUT_MS) } : null
+  const ranked = await findRankedProducts(q, { config })
+  return limited ? { ...ranked, notice: SMART_SEARCH_LIMITED_NOTICE } : ranked
+}
+
+function summarize(r: RankedProducts): SmartSearchSummary {
+  return {
+    mode: r.mode,
+    chips: describeIntent(r.intent),
+    relaxed: r.relaxed,
+    notice: r.notice,
+    outOfScope: r.intent.outOfScope,
+  }
+}
+
+// Header-sidebar-grid cùng cần một kết quả: cache() gộp thành 1 lần chạy / request (kể cả bước tìm kiếm thông minh).
+const getListing = cache(async (qs: string, category: string | undefined) => {
   const filters = parseProductFilters(new URLSearchParams(qs))
-  return listProducts(category ? { ...filters, category } : filters)
+  const base = category ? { ...filters, category } : filters
+  const ranked = await rankQuery(filters.q, category)
+  if (!ranked) return { ...(await listProducts(base)), smart: null }
+  // Thứ tự theo mức phù hợp (bỏ qua sort); bộ lọc khác của khách (size, màu, giá…) vẫn áp lên tập kết quả.
+  const list = await listProducts({ ...base, q: undefined }, { includeUnisex: true, onlyIds: ranked.ids })
+  return { ...list, smart: summarize(ranked) }
 })
 
 /**
@@ -56,9 +96,14 @@ export function ProductListing({
               <ResultCount qs={qs} category={category} />
             </Suspense>
           </div>
-          <SortSelect />
+          <Suspense fallback={<SortSelect />}>
+            <SortControl qs={qs} category={category} />
+          </Suspense>
         </div>
         <ActiveFilters />
+        <Suspense>
+          <SmartNote qs={qs} category={category} />
+        </Suspense>
         {/* key = URL: đổi bộ lọc → hiện skeleton thay vì giữ lưới cũ. */}
         <ResultsFrame>
           <Suspense key={qs + category} fallback={<GridSkeleton />}>
@@ -96,6 +141,17 @@ async function ResultCount({ qs, category }: { qs: string; category?: string }) 
       <span className="font-bold text-foreground">{total}</span> sản phẩm
     </p>
   )
+}
+
+/** Tìm kiếm thông minh xếp theo mức phù hợp nên không có ô chọn sắp xếp. */
+async function SortControl({ qs, category }: { qs: string; category?: string }) {
+  const { smart } = await getListing(qs, category)
+  return smart ? <p className="text-label text-muted-foreground">Xếp theo mức phù hợp</p> : <SortSelect />
+}
+
+async function SmartNote({ qs, category }: { qs: string; category?: string }) {
+  const { smart } = await getListing(qs, category)
+  return smart ? <SmartSearchNote smart={smart} /> : null
 }
 
 async function Results({ qs, category, basePath }: { qs: string; category?: string; basePath: string }) {

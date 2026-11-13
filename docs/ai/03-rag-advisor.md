@@ -8,12 +8,13 @@ Nguyên tắc: **số liệu và quyết định dùng code + SQL; LLM chỉ di�
 |---|---|---|---|
 | **SizeChart** (DB) | Có: 83 dòng, mỗi category lá quần áo một bảng (`ao-thun-nam`, `quan-jeans-nu`, `quan-unisex`, `vay-dam`, `vest-du-tiec-nam`…; riêng Urban Ghost ở `ao-thun-unisex`); `phu-kien` không có | SQL theo `categoryId` + `brand` (brand riêng thắng bảng chung — `getSizeChartInfo`/`getSizeChart` trong `catalog.service.ts`, chọn dòng bằng `pickSizeChartRows` ở `src/lib/size-chart.ts`; `getProductBySlug` trả sẵn `sizeChart`) | Không có cột giới tính/độ ôm; xem mục 3 |
 | **Chất liệu & chăm sóc** | Có sơ bộ: `getCareTips(material)` trong `src/lib/care.ts` (8 nhóm regex) + câu mô tả chất liệu trong `description` | Gọi `getCareTips` hoặc tra `KnowledgeChunk` loại `care` | Nội dung chung theo nhóm; **bạn cần soạn kỹ hơn** (mục 7) |
-| **Quy tắc phối đồ** | **CHƯA CÓ** (chỉ có câu "Gợi ý phối đồ" lẻ trong `description`) | `KnowledgeChunk` loại `styling` qua vector + lọc metadata | **Bạn tự soạn** |
+| **Quy tắc phối đồ** | **Đã có** (2026-11-13): 35 đoạn trong `docs/ai/knowledge/styling.md` + 23 dịp chuẩn trong `occasions.md`; bản nháp dùng tạm, cần chủ cửa hàng duyệt | `KnowledgeChunk` loại `styling` qua vector + lọc metadata; Mix & Match chọn món bằng code (mục 4.1) | Nội dung do bạn duyệt |
 | **Kho hàng thực tế** | Có: `ProductVariant.stock`, `Product.isActive` | SQL lúc truy vấn (không embed) | Mọi gợi ý phải qua bước kiểm tồn kho |
 | **Mô tả sản phẩm** | Có, đã định hướng embed (`01-data-for-ai.md`) | Vector search sản phẩm | |
 | **Chính sách cửa hàng** (đổi trả, vận chuyển, thanh toán) | Một phần trong code: phí ship (`FREE_SHIPPING_THRESHOLD = 500_000`, `FLAT_SHIPPING_FEE = 30_000`, `src/lib/shipping.ts`), hạn thanh toán VNPay 15 phút (`PAYMENT_WINDOW_MINUTES`, `src/lib/order.ts`), gom thành trang chính sách ở `src/lib/policies.ts` (vận chuyển, thanh toán); **chính sách đổi trả và bảo mật CHƯA CÓ** (đang để "đang cập nhật") | `KnowledgeChunk` loại `policy` | Chỉ trả lời điều đã có trong tài liệu |
 
-### Bảng chunk kiến thức (đề xuất, CHƯA CÓ)
+### Bảng chunk kiến thức (ĐÃ CÓ từ 2026-11-13)
+> Bản đã làm khác mẫu dưới đây: `embedding` là `vector(1024)` (bge-m3), khoá tự nhiên `(source, title)` thay cho `id` tự sinh, có cột `source` (tên file nguồn), không có `templateVersion` riêng theo `model` mà dùng hằng `KNOWLEDGE_TEMPLATE_VERSION`, không có chỉ mục vector (94 đoạn quét tuần tự đủ nhanh). Xem `prisma/schema.prisma`, `src/server/ai/advisor/knowledge-*.ts` và ngưỡng truy xuất 0,45 trong `knowledge.service.ts`.
 ```prisma
 model KnowledgeChunk {
   id              String   @id @default(cuid())
@@ -21,14 +22,14 @@ model KnowledgeChunk {
   title           String
   content         String   // 1 ý hoàn chỉnh, 80–300 từ
   metadata        Json     // { categories?: string[], gender?: string, seasons?: string[], materials?: string[] }
-  embedding       Unsupported("vector(1536)") // cùng N với ProductEmbedding
+  embedding       Unsupported("vector(1024)") // cùng N với ProductEmbedding (bge-m3)
   contentHash     String
   model           String
   templateVersion Int      @default(1)
   updatedAt       DateTime @updatedAt
 }
 ```
-Nguồn gốc nội dung: file Markdown trong `docs/ai/knowledge/*.md` (**CHƯA CÓ**), mỗi `##` là một chunk; script nạp tính hash và chỉ embed phần đổi (cùng cơ chế `ProductEmbedding`).
+Nguồn gốc nội dung: file Markdown trong `docs/ai/knowledge/*.md` (**đã có**: care, size-guide, policy, styling, occasions; 94 đoạn), mỗi `##` là một chunk; script nạp tính hash và chỉ embed phần đổi (cùng cơ chế `ProductEmbedding`).
 
 ### Cách chia chunk
 - Theo **ý trọn vẹn**, không cắt theo số ký tự: một quy tắc phối đồ / một nhóm chất liệu / một câu hỏi thường gặp = một chunk (80–300 từ).
@@ -69,7 +70,7 @@ Số đo thuộc về người dùng nhập trong hội thoại; **không lưu v
    - Hai size đầu **liền kề nhau** trong bảng và có `s` chênh `< 0.5` ⇒ **nằm giữa hai size** (mục 2.3); độ tin cậy `medium` nếu `s_best ≤ 1`, ngược lại `low` (không bao giờ `high`).
    - Còn lại ⇒ size tốt nhất, độ tin cậy `high` nếu `s = 0`, `medium` nếu `s ≤ 1`, ngược lại `low`.
 5. **Kiểm tồn kho** của size đề xuất cho sản phẩm cụ thể: `stockBySize` (size → danh sách màu còn `stock > 0`) cho ra `stock: { size, available, colors }`; chưa lọc theo màu khách chọn. Khi `recommended` mà size đề xuất hết hàng ⇒ thêm lý do nêu size liền kề còn hàng (nếu có). Với `between_two` hiện chỉ trả `stock` của size đề xuất, chưa cảnh báo size liền kề.
-6. LLM nhận **kết quả đã tính** và chỉ diễn đạt lại (không tự tính size). **CHƯA CÓ** (chat thật chưa kết nối): hiện giao diện vẽ thẻ trực tiếp từ kết quả của code.
+6. LLM nhận **kết quả đã tính** và chỉ diễn đạt lại (không tự tính size). **Đã nối** qua tool `getSizeRecommendation` (tool phát thẻ size từ kết quả của code, model chỉ tóm tắt bằng lời). Khi model không chịu gọi tool, cổng kiểm chứng (`chat/claims.ts`) thử lại; vẫn không được thì khách nhận câu trung thực "mình chưa tra được", không bao giờ một size do model tự nêu.
 
 ### 2.3 Khi nằm giữa hai size
 | Điều kiện | Gợi ý |
@@ -107,12 +108,21 @@ Bộ này dùng lại trong `06-evaluation.md`.
 - **Không có cột giới tính** trong `SizeChart`: danh mục đã tách thành cây Nam / Nữ / Unisex (2026-11-12), mỗi category lá một bảng size riêng (`SizeChart.categoryId`). Nam và Unisex dùng số đo form regular; Nữ dùng số đo cơ thể nữ (áo = bảng váy đầm; quần nữ size 26–32). **Số đo bảng nữ là ước lượng, chưa hiệu chỉnh với dữ liệu thật.**
 - Bảng riêng của Urban Ghost (`ao-thun-unisex`, ngực 104–116cm) vẫn đang là số liệu của thương hiệu form rộng; khi dùng bảng này, câu trả lời phải ghi chú "form rộng hơn bảng chung" (xem ca I ở mục 2.4; code hiện mới ghi chú "bảng size riêng của thương hiệu", chưa có ý form rộng).
 
+**Đã chốt (2026-11-13), 5 điểm thiết kế:**
+1. `fit` mặc định là `regular`.
+2. Dùng bảng riêng của Urban Ghost thì thêm ghi chú "form rộng hơn bảng chung" (**CHƯA có trong code**).
+3. `between_two`: cảnh báo size liền kề còn hàng hay hết (**CHƯA có trong code**; hiện chỉ trả `stock` của size đề xuất).
+4. `reasons` tối đa 4 dòng (khớp `reasons.max(4)`).
+5. Tool `getSizeRecommendation` là lớp mỏng gọi `adviseSizeForProduct`; hàm thuần trong `size.ts` giữ tên cũ. LLM chỉ tách số đo từ câu chat rồi gọi tool; kết quả vẫn do code tính và vẽ thẻ từ kết quả đó.
+
 **Còn hạn chế:**
 - Bảng size nữ là số liệu ước lượng (xem trên); tư vấn size cho nữ có thể kém chính xác cho đến khi hiệu chỉnh.
 - Không có **độ ôm** của từng sản phẩm (slim/regular/oversize): AI chỉ biết qua tên/mô tả.
 - Chiều cao/cân nặng chồng lấn giữa size liền kề → ca "nằm giữa" xảy ra thường xuyên; luôn cần hỏi sở thích ôm/rộng.
 
 ## 4. Luồng Mix & Match (chỉ dùng hàng còn)
+
+> **Đã làm 2026-11-13, khác thiết kế dưới đây ở bước 3: code chọn món, LLM không chọn.** Lý do: model 4B bịa điều kiện, bịa tên sản phẩm và hay bỏ qua tool (`04-tool-calling.md` mục 7), nên việc chọn món, kiểm tồn kho, tính tổng tiền và viết lý do từng món đều do code (`advisor/outfit.ts` là hàm thuần, `advisor/outfit.service.ts` nạp ứng viên từ DB); LLM chỉ tóm tắt kết quả bằng lời. Giới tính, dịp, mùa, ngân sách, size lấy bằng code từ các câu gần đây của khách (`wantedFrom`), chưa biết nam hay nữ thì hỏi lại (`NEED_GENDER`), không đoán. Xem mục 4.1.
 
 ```
 Đầu vào: sản phẩm gốc (slug) HOẶC {dịp, giới tính, ngân sách, mùa}
@@ -158,7 +168,7 @@ export const outfitSchema = z.object({
   note: z.string().nullable(),
 })
 ```
-Hiện trạng: `sizeRecommendationSchema` và `outfitSchema` (Zod) **CHƯA có** trong `src/lib/validators/ai.ts` (mới có `sizeAdviceInputSchema`). Giao diện đang dùng kiểu thuần ở `src/types/assistant.ts`: `SizeRecommendationView` (có `productName`, `stock: { size, available, colors }`, `message`; chưa có `chartSource`, `followUpQuestion`; `missingFields` chỉ gồm các trường số đo, không có `fit`) và `OutfitView` (món có `name`, `image`, `variantLabel`, `price`; chưa có `productId`, `variantId`). Hai kiểu này sẽ thay bằng `z.infer` khi có schema.
+Hiện trạng (2026-11-14): `sizeRecommendationSchema` và `outfitViewSchema` (Zod) **đã có** trong `src/lib/validators/ai.ts` (cùng `sizeChartRowSchema`, `confirmViewSchema`) và được `lib/ai/chat-events.ts` dùng để kiểm từng dòng của luồng NDJSON phía client. Giao diện vẫn vẽ bằng kiểu thuần ở `src/types/assistant.ts` (không kéo Zod vào component): `SizeRecommendationView` (có `productName`, `stock: { size, available, colors }`, `message`; chưa có `chartSource`, `followUpQuestion`; `missingFields` chỉ gồm các trường số đo, không có `fit`) và `OutfitView` (món có `name`, `image`, `variantLabel`, `price`; chưa có `productId`, `variantId`). Hai kiểu này chưa thay bằng `z.infer`.
 
 Khi dùng structured output của SDK, validate lại bằng cùng schema ở server; sai schema ⇒ thử lại 1 lần rồi fallback (câu trả lời thường, không JSON).
 
@@ -216,3 +226,10 @@ Bản phác đã duyệt: khung chat trợ lý, kết quả của Advisor hiện
 - `getSizeRecommendation` đúng toàn bộ 9 ca ở mục 2.4 (kiểm bằng test đơn vị trên hàm thuần, không cần LLM).
 - Outfit: 100% `productId` thuộc tập ứng viên và còn hàng; tổng tiền do code tính.
 - Các ca thiếu tri thức trả `need_info`/`no_chart`/"chưa có thông tin" thay vì bịa (kiểm theo `06`).
+
+### 4.1 Triển khai Mix & Match (B1.8)
+- **Ô và quy tắc phối** (`planSlots`): nam và unisex dùng áo + quần; nữ dùng váy đầm khi dịp là dự tiệc, hẹn hò, dự đám cưới, dự sự kiện, đi nghe nhạc, chụp ảnh, dịp Tết (và kho có váy), còn lại dùng áo + quần; thêm áo khoác khi mùa thu/đông hoặc dịp trang trọng (đi họp, phỏng vấn, đám cưới, tiệc, sự kiện); phụ kiện là món thêm (không có thì không báo thiếu); thiếu áo, quần, váy hoặc áo khoác thì ghi vào `missingSlots` thay vì nhồi món khác. Chân váy nằm trong danh mục "Váy đầm" nhưng được phối như quần (không phải bộ hoàn chỉnh).
+- **Chọn món**: lọc cứng (đang bán, có biến thể còn hàng, hợp giới tính gồm cả unisex, còn size khách nói nếu có), giữ 6 món điểm cao nhất mỗi ô (điểm: hợp dịp +3, hợp mùa +1,5), mỗi món tối đa 2 màu (màu trung tính trước). Tìm vét cạn tổ hợp: điểm cao nhất (cộng điểm hài hoà: cùng phong cách, cùng nhóm lịch sự hoặc thường ngày, tối đa một màu nổi, không trùng màu nổi) trong ngân sách; hoà thì rẻ hơn rồi theo mã sản phẩm nên kết quả ổn định. Ngân sách là tổng cả bộ: không bộ nào vừa thì `OVER_BUDGET`.
+- **Món khách đã chọn sẵn** (tên sản phẩm, qua `resolveProduct`) luôn nằm trong bộ, giới tính theo món đó. Tên sản phẩm chỉ được nhận khi chính khách đã nói (model hay bịa tên cho tham số này).
+- **Lý do từng món do code dựng** từ thuộc tính thật (dịp, mùa, phong cách, màu), `knowledgeSources` là tiêu đề các đoạn kiến thức phối đồ truy xuất được (lỗi thì bỏ qua), tổng tiền do code cộng.
+- **Chưa làm**: nút "Thêm cả bộ" (cần xác nhận nhiều món trong một lần; hiện thẻ không có nút này, khách bấm vào từng sản phẩm để chọn size rồi thêm), phối theo màu cụ thể khách yêu cầu, ghi nhớ bộ đã gợi ý để gợi ý bộ khác.

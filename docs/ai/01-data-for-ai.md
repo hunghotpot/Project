@@ -74,17 +74,17 @@ Mô tả: Sơ mi cổ trụ không ve áo, đường nét tinh giản mang hơi 
 
 > Nhãn phong cách lấy từ `STYLE_LABEL` (`src/lib/format.ts`, ví dụ elegant → "Thanh lịch", formal → "Lịch sự", minimalist → "Tối giản"); template ghép thêm token gốc trong ngoặc để khớp cả từ tiếng Anh.
 
-## 3. Schema bảng embedding (đề xuất, CHƯA CÓ)
+## 3. Schema bảng embedding (ĐÃ CÓ từ 2026-11-13)
 
-Extension `vector` đã bật (migration `20261109180232_init`); **chưa có cột/bảng embedding**. Tách bảng riêng để bảng `Product` không phình và dễ thay model.
+Extension `vector` đã bật (migration `20261109180232_init`); bảng `ProductEmbedding` đã có (migration `20261113114658_product_embedding`, cột `vector(1024)`, chỉ mục HNSW). Tách bảng riêng để bảng `Product` không phình và dễ thay model.
 
 ```prisma
 model ProductEmbedding {
   productId       String   @id
-  embedding       Unsupported("vector(1536)") // N phụ thuộc model, xem bảng dưới
+  embedding       Unsupported("vector(1024)") // N = 1024 theo bge-m3 (đã chốt), xem bảng dưới
   content         String   // đúng chuỗi đã embed (debug, so sánh, tạo lại hash)
   contentHash     String   // SHA-256 của `content` + model + templateVersion
-  model           String   // ví dụ "text-embedding-3-small" – ghi đúng id đã dùng
+  model           String   // "bge-m3" – ghi đúng id đã dùng
   dimensions      Int
   templateVersion Int      @default(1)
   embeddedAt      DateTime @default(now())
@@ -99,7 +99,7 @@ CREATE INDEX "ProductEmbedding_embedding_hnsw"
   ON "ProductEmbedding" USING hnsw ("embedding" vector_cosine_ops)
   WITH (m = 16, ef_construction = 64);
 ```
-Đọc/ghi cột `vector` bằng `db.$queryRaw` / `db.$executeRaw` (Prisma Client không có kiểu cho `Unsupported`). Sau khi tạo migration, chạy `prisma migrate diff` kiểm tra không báo drift/đòi xoá index (cần xác nhận trên phiên bản Prisma đang dùng, 6.19).
+Đọc/ghi cột `vector` bằng `db.$queryRaw` / `db.$executeRaw` (Prisma Client không có kiểu cho `Unsupported`). **Đã kiểm (2026-11-13, Prisma 6.19.3):** `prisma migrate diff --from-url <DATABASE_URL> --to-schema-datamodel prisma/schema.prisma --script` báo `DROP INDEX "ProductEmbedding_embedding_hnsw"` vì Prisma không biết chỉ mục HNSW. Hệ quả: lần sau chạy `prisma migrate dev` để tạo migration khác, **xoá dòng `DROP INDEX "ProductEmbedding_embedding_hnsw"` khỏi file migration mới sinh** trước khi áp dụng (nếu lỡ áp dụng thì chỉ mất chỉ mục, không mất dữ liệu; ở 125 sản phẩm tìm kiếm vẫn đủ nhanh nhờ quét tuần tự). Sau khi `migrate dev` cũng nên chạy `npx prisma generate` nếu Client chưa có `productEmbedding`.
 
 ### Số chiều theo model dự kiến (cần xác nhận lại khi chọn)
 | Model (ví dụ) | Chiều | Ghi chú |
@@ -110,7 +110,7 @@ CREATE INDEX "ProductEmbedding_embedding_hnsw"
 | Google `gemini-embedding` | cấu hình được | Kiểm tra tài liệu |
 | Model tự host (multilingual-e5, bge-m3…) | 768–1024 | Cần hạ tầng |
 
-Khuyến nghị: chọn 1024–1536 chiều. Kiểu `vector` của pgvector đánh index được tối đa 2000 chiều; muốn nhiều hơn dùng `halfvec`. **Đổi N = migration + embed lại toàn bộ**, nên chốt trước (quyết định #2 ở `00-overview`).
+**Đã chốt (2026-11-13): `bge-m3` qua Ollama, 1024 chiều** (máy đã tải, Ollama báo `embedding_length` 1024). Kiểu `vector` của pgvector đánh index được tối đa 2000 chiều; muốn nhiều hơn dùng `halfvec`. **Đổi N = migration + embed lại toàn bộ**, nên chốt trước (quyết định #2 ở `00-overview`).
 
 ### Chọn index
 - 125 sản phẩm: quét tuần tự (exact) đã đủ nhanh; vẫn tạo HNSW để thiết kế không phải đổi khi catalog lớn.
@@ -130,9 +130,9 @@ Khuyến nghị: chọn 1024–1536 chiều. Kiểu `vector` của pgvector đá
 | Xoá sản phẩm | `ON DELETE CASCADE` tự xoá embedding |
 | Đổi model hoặc `templateVersion` | Hash của mọi dòng đổi → chạy lại job reconcile |
 
-Cơ chế (đề xuất):
-1. **Job reconcile** `npm run ai:embed` (`scripts/ai/embed.ts`, chạy bằng `tsx`, **CHƯA CÓ**): duyệt mọi sản phẩm, dựng `content`, so hash với DB, chỉ embed dòng khác/thiếu, gửi theo lô. Chạy được lặp lại an toàn (idempotent).
-2. **Móc vào Admin**: điểm móc **ĐÃ CÓ** nhưng thân hàm rỗng: `syncProductEmbedding(productId)` ở `src/server/services/product-hooks.ts`, được `admin-product.service.ts` gọi sau mỗi lần tạo/sửa/ẩn-hiện/xoá sản phẩm và nhập kho (ngoài transaction, lỗi chỉ ghi log). Khi làm embedding chỉ cần điền thân hàm (không chặn người dùng; lỗi embed để job reconcile bù).
+Cơ chế (**ĐÃ CÓ** từ 2026-11-13):
+1. **Job reconcile** `npm run ai:embed` (`scripts/ai/embed.ts`, chạy bằng `tsx`; `-- --force` để embed lại tất cả): duyệt mọi sản phẩm, dựng `content` (`search/product-document.ts`), so hash với DB, chỉ embed dòng khác/thiếu, gửi theo lô 16 (`search/sync-embeddings.ts`). Chạy lại an toàn (idempotent). Đo trên máy phát triển: 125 sản phẩm mất 24 giây, chạy lại thì bỏ qua hết trong dưới 1 giây. **Phải chạy lại sau `npm run db:seed`** (seed xoá sản phẩm nên embedding tự xoá theo).
+2. **Móc vào Admin**: `syncProductEmbedding(productId)` ở `src/server/services/product-hooks.ts` đã có thân hàm, được `admin-product.service.ts` gọi sau mỗi lần tạo/sửa/ẩn-hiện/xoá sản phẩm và nhập kho (ngoài transaction). Hàm chạy **nền, không await** (embed có thể mất vài chục giây, không được làm chậm Admin), AI tắt thì không làm gì, lỗi chỉ ghi log và để job reconcile bù.
 3. Cron nhẹ (hoặc bấm tay trong Admin) chạy reconcile để vá các lỗi tạm thời.
 4. Giữ `content` trong bảng để biết chính xác văn bản nào đã được embed.
 
